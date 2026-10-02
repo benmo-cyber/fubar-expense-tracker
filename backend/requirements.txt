@@ -1,0 +1,20 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+alembic==1.12.1
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+Pillow==10.1.0
+httpx==0.25.2
+pytesseract==0.3.10
+
+# Optional dependencies for enhanced features
+boto3==1.34.0  # For S3 storage (optional)
+openai==1.3.0  # For AI categorization (RECOMMENDED - included with ChatGPT Business)
+
+# Development/Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
