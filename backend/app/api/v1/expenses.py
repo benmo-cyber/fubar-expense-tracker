@@ -2,11 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from app.core.database import get_db
-from app.models import Expense, Category, User, ExpenseStatus, GLAccount, GLAccountMapping
+from app.models import (
+    Expense, Category, User, ExpenseStatus, GLAccount, GLAccountMapping,
+    ExpenseReport, ReportCategoryBreakdown, ReportStatus,
+)
 from app.schemas import (
     ExpenseCreate, ExpenseUpdate, ExpenseResponse, ExpenseDetailResponse,
     ExpenseApproveRequest, ExpenseRejectRequest, BulkApprovalResponse,
-    ReceiptScanResponse, OCRResult, AICategorization
+    ReceiptScanResponse, OCRResult, AICategorization, FileExpenseRequest
 )
 from app.middleware.auth import get_current_user, get_current_admin_user
 from app.services.storage import storage_service
@@ -14,10 +17,76 @@ from app.services.webhook import webhook_service
 from app.services.ocr import ocr_service
 from app.services.ai import ai_service
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date
+from calendar import monthrange
 import uuid
 
 router = APIRouter(prefix="/expenses", tags=["Expenses"])
+
+
+def parse_receipt_date(value: Optional[str]) -> Optional[date]:
+    if not value:
+        return None
+    text = value.strip()
+    for fmt in (
+        "%m/%d/%Y",
+        "%m/%d/%y",
+        "%m-%d-%Y",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%b %d, %Y",
+        "%B %d, %Y",
+        "%b %d %Y",
+        "%B %d %Y",
+    ):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def add_expense_to_report(db: Session, expense: Expense) -> None:
+    start = expense.expense_date.replace(day=1)
+    end = start.replace(day=monthrange(start.year, start.month)[1])
+    report = db.query(ExpenseReport).filter(
+        ExpenseReport.user_id == expense.user_id,
+        ExpenseReport.period_start == start,
+        ExpenseReport.status == ReportStatus.DRAFT,
+    ).first()
+    if report is None:
+        report = ExpenseReport(
+            user_id=expense.user_id,
+            period_start=start,
+            period_end=end,
+            total_amount=0,
+            currency=expense.currency,
+            expense_count=0,
+            status=ReportStatus.DRAFT,
+        )
+        db.add(report)
+        db.flush()
+
+    report.total_amount = (report.total_amount or 0) + expense.amount
+    report.expense_count = (report.expense_count or 0) + 1
+
+    if not expense.category_id:
+        return
+
+    line = db.query(ReportCategoryBreakdown).filter(
+        ReportCategoryBreakdown.report_id == report.id,
+        ReportCategoryBreakdown.category_id == expense.category_id,
+    ).first()
+    if line is None:
+        db.add(ReportCategoryBreakdown(
+            report_id=report.id,
+            category_id=expense.category_id,
+            amount=expense.amount,
+            expense_count=1,
+        ))
+    else:
+        line.amount = line.amount + expense.amount
+        line.expense_count = line.expense_count + 1
 
 
 @router.post("/scan-receipt", response_model=ReceiptScanResponse)
@@ -30,35 +99,48 @@ async def scan_receipt(
         raise HTTPException(status_code=400, detail="File must be an image")
     
     image_content = await file.read()
-    
-    ocr_result = ocr_service.extract_text_from_image(image_content)
-    
-    ocr_response = OCRResult(
-        merchant_name=ocr_result.get("merchant_name"),
-        amount=ocr_result.get("amount"),
-        date=ocr_result.get("date"),
-        confidence=ocr_result["confidence"],
-        raw_text=ocr_result["raw_text"]
-    )
-    
-    ai_suggestion = None
     categories = db.query(Category).filter(Category.is_active == True).all()
-    
-    if categories:
-        category_dicts = [
-            {"id": cat.id, "name": cat.name, "description": cat.description}
-            for cat in categories
-        ]
-        
-        ai_result = ai_service.categorize_expense(
+    category_dicts = [
+        {"id": cat.id, "name": cat.name, "description": cat.description}
+        for cat in categories
+    ]
+    vision = ai_service.read_receipt(image_content, category_dicts) if ai_service.enabled else None
+
+    if vision:
+        ocr_response = OCRResult(
+            merchant_name=vision.get("merchant_name"),
+            amount=vision.get("amount"),
+            date=parse_receipt_date(vision.get("date")),
+            confidence=vision["confidence"],
+            raw_text=vision["raw_text"],
+        )
+        ai_result = vision.get("category")
+    else:
+        ocr_result = ocr_service.extract_text_from_image(image_content)
+        ocr_response = OCRResult(
+            merchant_name=ocr_result.get("merchant_name"),
+            amount=ocr_result.get("amount"),
+            date=parse_receipt_date(ocr_result.get("date")),
+            confidence=ocr_result["confidence"],
+            raw_text=ocr_result["raw_text"]
+        )
+        ai_result = ai_service.choose_category(
             ocr_text=ocr_result["raw_text"],
             merchant_name=ocr_result.get("merchant_name"),
             amount=ocr_result.get("amount"),
             categories=category_dicts
-        )
-        
-        if ai_result:
-            ai_suggestion = AICategorization(**ai_result)
+        ) if category_dicts else None
+
+    ai_suggestion = None
+    if ai_result:
+        mapping = db.query(GLAccountMapping).filter(
+            GLAccountMapping.category_id == uuid.UUID(str(ai_result["category_id"]))
+        ).first()
+        if mapping and mapping.gl_account:
+            ai_result["gl_account_id"] = str(mapping.gl_account.id)
+            ai_result["gl_account_code"] = mapping.gl_account.account_code
+            ai_result["gl_account_name"] = mapping.gl_account.account_name
+        ai_suggestion = AICategorization(**ai_result)
     
     return ReceiptScanResponse(
         ocr_result=ocr_response,
@@ -116,6 +198,67 @@ def create_expense(
     db.commit()
     db.refresh(db_expense)
     
+    return db_expense
+
+
+@router.post("/file", response_model=ExpenseDetailResponse, status_code=status.HTTP_201_CREATED)
+def file_expense(
+    amount: float = Form(...),
+    merchant_name: str = Form(...),
+    expense_date: date = Form(...),
+    category_id: uuid.UUID = Form(...),
+    currency: str = Form("USD"),
+    notes: str = Form(""),
+    receipt_ocr_text: str = Form(""),
+    ocr_confidence: Optional[float] = Form(None),
+    ai_confidence: Optional[float] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    category = db.query(Category).filter(Category.id == category_id, Category.is_active == True).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Expense account not found")
+
+    mapping = db.query(GLAccountMapping).filter(
+        GLAccountMapping.category_id == category.id
+    ).first()
+    if not mapping:
+        raise HTTPException(status_code=400, detail="This expense account is not assigned to a GL account")
+
+    receipt_url = None
+    if file is not None and file.filename:
+        receipt_url = storage_service.upload_file(
+            file.file,
+            file.filename,
+            file.content_type or "image/jpeg",
+        )
+
+    db_expense = Expense(
+        user_id=current_user.id,
+        amount=amount,
+        currency=currency,
+        description=notes,
+        merchant_name=merchant_name,
+        expense_date=expense_date,
+        category_id=category.id,
+        gl_account_id=mapping.gl_account_id,
+        receipt_url=receipt_url,
+        receipt_ocr_text=receipt_ocr_text or None,
+        ocr_confidence=ocr_confidence,
+        ai_suggested_category_id=category.id,
+        ai_confidence=ai_confidence,
+        notes=notes,
+        status=ExpenseStatus.PENDING,
+        submitted_at=datetime.utcnow(),
+        category_manually_set=False,
+        gl_override=False,
+    )
+    db.add(db_expense)
+    db.flush()
+    add_expense_to_report(db, db_expense)
+    db.commit()
+    db.refresh(db_expense)
     return db_expense
 
 
@@ -242,6 +385,7 @@ def submit_expense(
     
     expense.status = ExpenseStatus.PENDING
     expense.submitted_at = datetime.utcnow()
+    add_expense_to_report(db, expense)
     
     db.commit()
     db.refresh(expense)

@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr, Field, UUID4
 from typing import Optional, List
 from datetime import datetime, date
+import datetime as dt
 from decimal import Decimal
 from enum import Enum
 
@@ -143,7 +144,7 @@ class GLAccountMappingDetail(GLAccountMappingResponse):
 
 
 class ExpenseBase(BaseModel):
-    amount: Decimal = Field(..., gt=0, decimal_places=2)
+    amount: Decimal = Field(..., gt=0)
     currency: str = "USD"
     description: Optional[str] = None
     merchant_name: Optional[str] = None
@@ -162,8 +163,20 @@ class ExpenseCreate(ExpenseBase):
     ai_confidence: Optional[Decimal] = None
 
 
+class FileExpenseRequest(BaseModel):
+    amount: Decimal = Field(..., gt=0)
+    currency: str = "USD"
+    merchant_name: str
+    expense_date: date
+    category_id: UUID4
+    notes: Optional[str] = None
+    receipt_ocr_text: Optional[str] = None
+    ocr_confidence: Optional[Decimal] = None
+    ai_confidence: Optional[Decimal] = None
+
+
 class ExpenseUpdate(BaseModel):
-    amount: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    amount: Optional[Decimal] = Field(None, gt=0)
     currency: Optional[str] = None
     description: Optional[str] = None
     merchant_name: Optional[str] = None
@@ -217,7 +230,7 @@ class ExpenseRejectRequest(BaseModel):
 class OCRResult(BaseModel):
     merchant_name: Optional[str] = None
     amount: Optional[Decimal] = None
-    date: Optional[date] = None
+    date: Optional[dt.date] = None
     confidence: Decimal
     raw_text: str
 
@@ -227,6 +240,9 @@ class AICategorization(BaseModel):
     category_name: str
     confidence: Decimal
     reasoning: str
+    gl_account_id: Optional[UUID4] = None
+    gl_account_code: Optional[str] = None
+    gl_account_name: Optional[str] = None
 
 
 class ReceiptScanResponse(BaseModel):

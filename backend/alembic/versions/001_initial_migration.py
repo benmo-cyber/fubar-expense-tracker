@@ -7,7 +7,6 @@ Create Date: 2026-10-02 00:00:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '001'
@@ -18,7 +17,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.create_table('users',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('id', sa.Uuid(as_uuid=True), nullable=False),
         sa.Column('email', sa.String(length=255), nullable=False),
         sa.Column('hashed_password', sa.String(length=255), nullable=False),
         sa.Column('full_name', sa.String(length=255), nullable=False),
@@ -33,7 +32,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
     
     op.create_table('categories',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('id', sa.Uuid(as_uuid=True), nullable=False),
         sa.Column('name', sa.String(length=100), nullable=False),
         sa.Column('description', sa.Text(), nullable=True),
         sa.Column('color', sa.String(length=7), nullable=True),
@@ -45,7 +44,7 @@ def upgrade() -> None:
     )
     
     op.create_table('gl_accounts',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('id', sa.Uuid(as_uuid=True), nullable=False),
         sa.Column('account_code', sa.String(length=50), nullable=False),
         sa.Column('account_name', sa.String(length=255), nullable=False),
         sa.Column('description', sa.Text(), nullable=True),
@@ -59,9 +58,9 @@ def upgrade() -> None:
     op.create_index(op.f('ix_gl_accounts_account_code'), 'gl_accounts', ['account_code'], unique=True)
     
     op.create_table('gl_account_mappings',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('category_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('gl_account_id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('category_id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('gl_account_id', sa.Uuid(as_uuid=True), nullable=False),
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.Column('updated_at', sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(['category_id'], ['categories.id'], ),
@@ -71,10 +70,10 @@ def upgrade() -> None:
     )
     
     op.create_table('expenses',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('user_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('category_id', postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column('gl_account_id', postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column('id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('user_id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('category_id', sa.Uuid(as_uuid=True), nullable=True),
+        sa.Column('gl_account_id', sa.Uuid(as_uuid=True), nullable=True),
         sa.Column('amount', sa.Numeric(precision=12, scale=2), nullable=False),
         sa.Column('currency', sa.String(length=3), nullable=False),
         sa.Column('description', sa.Text(), nullable=True),
@@ -83,7 +82,7 @@ def upgrade() -> None:
         sa.Column('receipt_url', sa.String(length=500), nullable=True),
         sa.Column('receipt_ocr_text', sa.Text(), nullable=True),
         sa.Column('ocr_confidence', sa.Numeric(precision=3, scale=2), nullable=True),
-        sa.Column('ai_suggested_category_id', postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column('ai_suggested_category_id', sa.Uuid(as_uuid=True), nullable=True),
         sa.Column('ai_confidence', sa.Numeric(precision=3, scale=2), nullable=True),
         sa.Column('category_manually_set', sa.Boolean(), nullable=True),
         sa.Column('status', sa.Enum('draft', 'pending', 'approved', 'rejected', name='expensestatus'), nullable=False),
@@ -96,7 +95,7 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(), nullable=False),
         sa.Column('submitted_at', sa.DateTime(), nullable=True),
         sa.Column('approved_at', sa.DateTime(), nullable=True),
-        sa.Column('approved_by', postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column('approved_by', sa.Uuid(as_uuid=True), nullable=True),
         sa.ForeignKeyConstraint(['ai_suggested_category_id'], ['categories.id'], ),
         sa.ForeignKeyConstraint(['approved_by'], ['users.id'], ),
         sa.ForeignKeyConstraint(['category_id'], ['categories.id'], ),
@@ -109,8 +108,8 @@ def upgrade() -> None:
     op.create_index(op.f('ix_expenses_user_id'), 'expenses', ['user_id'], unique=False)
     
     op.create_table('expense_reports',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('user_id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('user_id', sa.Uuid(as_uuid=True), nullable=False),
         sa.Column('period_start', sa.Date(), nullable=False),
         sa.Column('period_end', sa.Date(), nullable=False),
         sa.Column('total_amount', sa.Numeric(precision=12, scale=2), nullable=False),
@@ -126,9 +125,9 @@ def upgrade() -> None:
     )
     
     op.create_table('report_category_breakdown',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('report_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('category_id', postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column('id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('report_id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('category_id', sa.Uuid(as_uuid=True), nullable=False),
         sa.Column('amount', sa.Numeric(precision=12, scale=2), nullable=False),
         sa.Column('expense_count', sa.Integer(), nullable=False),
         sa.ForeignKeyConstraint(['category_id'], ['categories.id'], ),
@@ -137,12 +136,12 @@ def upgrade() -> None:
     )
     
     op.create_table('audit_logs',
-        sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('user_id', postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column('id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('user_id', sa.Uuid(as_uuid=True), nullable=True),
         sa.Column('action', sa.String(length=100), nullable=False),
         sa.Column('entity_type', sa.String(length=50), nullable=False),
-        sa.Column('entity_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('changes', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column('entity_id', sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column('changes', sa.JSON(), nullable=True),
         sa.Column('ip_address', sa.String(length=45), nullable=True),
         sa.Column('user_agent', sa.Text(), nullable=True),
         sa.Column('created_at', sa.DateTime(), nullable=False),

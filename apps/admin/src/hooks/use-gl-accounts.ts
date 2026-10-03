@@ -22,6 +22,47 @@ export function useGLAccountMappings() {
   })
 }
 
+export type ExpenseAccount = {
+  category_id: string
+  name: string
+  description?: string
+  gl_account_id?: string
+  gl_code?: string
+  gl_name?: string
+}
+
+export function useExpenseAccounts() {
+  return useQuery({
+    queryKey: ['expense-accounts'],
+    queryFn: async () => {
+      const { data } = await api.get<ExpenseAccount[]>('/gl-accounts/expense-accounts')
+      return data
+    },
+  })
+}
+
+export function useCreateExpenseAccount() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (account: {
+      name: string
+      description?: string
+      gl_code: string
+      gl_name: string
+    }) => {
+      const { data } = await api.post<ExpenseAccount>('/gl-accounts/expense-accounts', account)
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['categories'] })
+      queryClient.invalidateQueries({ queryKey: ['gl-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+    },
+  })
+}
+
 export function useCategories() {
   return useQuery({
     queryKey: ['categories'],

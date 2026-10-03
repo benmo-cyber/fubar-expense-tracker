@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -17,6 +18,8 @@ import {
   useCreateGLAccountMapping,
   useUpdateGLAccountMapping,
   useDeleteGLAccountMapping,
+  useExpenseAccounts,
+  useCreateExpenseAccount,
 } from '@/hooks/use-gl-accounts'
 import { Loader2, Trash2, Plus } from 'lucide-react'
 
@@ -28,10 +31,36 @@ export default function GLAccountsPage() {
   const updateMapping = useUpdateGLAccountMapping()
   const deleteMapping = useDeleteGLAccountMapping()
 
+  const { data: expenseAccounts } = useExpenseAccounts()
+  const createAccount = useCreateExpenseAccount()
+  const [accountName, setAccountName] = useState('')
+  const [accountDescription, setAccountDescription] = useState('')
+  const [glCode, setGlCode] = useState('')
+  const [glName, setGlName] = useState('')
+  const [formError, setFormError] = useState('')
+
   const [newMapping, setNewMapping] = useState<{
     categoryId: string
     glAccountId: string
   } | null>(null)
+
+  const handleCreateAccount = async () => {
+    setFormError('')
+    try {
+      await createAccount.mutateAsync({
+        name: accountName.trim(),
+        description: accountDescription.trim(),
+        gl_code: glCode.trim(),
+        gl_name: glName.trim(),
+      })
+      setAccountName('')
+      setAccountDescription('')
+      setGlCode('')
+      setGlName('')
+    } catch {
+      setFormError('That expense account was not created. Use a new name and fill in the GL account.')
+    }
+  }
 
   const isLoading = glLoading || mappingsLoading || categoriesLoading
 
@@ -60,11 +89,74 @@ export default function GLAccountsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">GL Account Mappings</h1>
+        <h1 className="text-3xl font-bold">Expense accounts</h1>
         <p className="text-muted-foreground">
-          Map expense categories to general ledger account codes
+          Create the plain-text accounts people see, and assign each one to a GL account.
         </p>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>New expense account</CardTitle>
+          <CardDescription>
+            The phone uses this name when it files a scanned receipt.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <Label>Account name</Label>
+              <Input className="mt-1" value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="Fuel" />
+            </div>
+            <div>
+              <Label>What it is for</Label>
+              <Input className="mt-1" value={accountDescription} onChange={(e) => setAccountDescription(e.target.value)} placeholder="Gas stations and vehicle fuel" />
+            </div>
+            <div>
+              <Label>GL code</Label>
+              <Input className="mt-1" value={glCode} onChange={(e) => setGlCode(e.target.value)} placeholder="6100" />
+            </div>
+            <div>
+              <Label>GL account name</Label>
+              <Input className="mt-1" value={glName} onChange={(e) => setGlName(e.target.value)} placeholder="Vehicle fuel" />
+            </div>
+          </div>
+          {formError ? <p className="text-sm text-red-600">{formError}</p> : null}
+          <Button
+            onClick={handleCreateAccount}
+            disabled={!accountName.trim() || !glCode.trim() || !glName.trim() || createAccount.isPending}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Create account
+          </Button>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Expense account</TableHead>
+                <TableHead>Used for</TableHead>
+                <TableHead>GL code</TableHead>
+                <TableHead>GL name</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {expenseAccounts?.length ? expenseAccounts.map((account) => (
+                <TableRow key={account.category_id}>
+                  <TableCell className="font-medium">{account.name}</TableCell>
+                  <TableCell>{account.description || '—'}</TableCell>
+                  <TableCell>{account.gl_code || 'Not assigned'}</TableCell>
+                  <TableCell>{account.gl_name || 'Not assigned'}</TableCell>
+                </TableRow>
+              )) : (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center text-muted-foreground">
+                    No expense accounts yet
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
 
       {unmappedCategories.length > 0 && (
         <Card className="border-blue-200 bg-blue-50/50">
