@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 from app.core.config import settings
-from app.api.v1 import auth, expenses, categories, gl_accounts, admin, export
+from app.api.v1 import auth, expenses, categories, gl_accounts, admin, export, workspace
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -28,6 +28,7 @@ app.include_router(export.router, prefix=settings.API_V1_STR)
 app.include_router(categories.router, prefix=settings.API_V1_STR)
 app.include_router(gl_accounts.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router, prefix=settings.API_V1_STR)
+app.include_router(workspace.router, prefix=settings.API_V1_STR)
 
 # Serve receipt uploads from local filesystem
 if not settings.USE_S3_STORAGE:
@@ -52,27 +53,44 @@ if settings.SERVE_ADMIN_PORTAL:
 @app.on_event("startup")
 def seed_local_users():
     from app.core.database import SessionLocal
+    from app.core.schema_upgrade import ensure_schema
     from app.core.security import get_password_hash
-    from app.models import User, UserRole
+    from app.models import Expense, User, UserRole
+    from app.services.merchants import resolve_merchant
+    from app.services.reports import place_expense
 
+    ensure_schema()
     db = SessionLocal()
     try:
-        if db.query(User).first():
-            return
-        db.add(User(
-            email="admin@example.com",
-            hashed_password=get_password_hash("AdminPass1"),
-            full_name="Admin",
-            role=UserRole.ADMIN,
-            is_active=True,
-        ))
-        db.add(User(
-            email="field@example.com",
-            hashed_password=get_password_hash("FieldPass1"),
-            full_name="Field User",
-            role=UserRole.OPERATIONS,
-            is_active=True,
-        ))
+        if not db.query(User).first():
+            db.add(User(
+                email="admin@example.com",
+                hashed_password=get_password_hash("AdminPass1"),
+                full_name="Admin",
+                role=UserRole.ADMIN,
+                is_active=True,
+                is_superuser=True,
+            ))
+            db.add(User(
+                email="field@example.com",
+                hashed_password=get_password_hash("FieldPass1"),
+                full_name="Field User",
+                role=UserRole.OPERATIONS,
+                is_active=True,
+            ))
+            db.commit()
+        admin_user = db.query(User).filter(User.email == "admin@example.com").first()
+        if admin_user and not admin_user.is_superuser:
+            admin_user.is_superuser = True
+        if admin_user:
+            for person in db.query(User).filter(User.id != admin_user.id, User.supervisor_id.is_(None)).all():
+                person.supervisor_id = admin_user.id
+        for expense in db.query(Expense).filter(Expense.report_id.is_(None)).all():
+            if expense.merchant_name and expense.merchant_id is None:
+                merchant = resolve_merchant(db, expense.merchant_name)
+                if merchant:
+                    expense.merchant_id = merchant.id
+            place_expense(db, expense)
         db.commit()
     finally:
         db.close()

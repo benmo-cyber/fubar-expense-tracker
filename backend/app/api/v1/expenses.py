@@ -4,7 +4,7 @@ from sqlalchemy import and_, or_
 from app.core.database import get_db
 from app.models import (
     Expense, Category, User, ExpenseStatus, GLAccount, GLAccountMapping,
-    ExpenseReport, ReportCategoryBreakdown, ReportStatus,
+    ExpenseReport, ReportCategoryBreakdown, ReportStatus, UserRole,
 )
 from app.schemas import (
     ExpenseCreate, ExpenseUpdate, ExpenseResponse, ExpenseDetailResponse,
@@ -15,6 +15,8 @@ from app.middleware.auth import get_current_user, get_current_admin_user
 from app.services.storage import storage_service
 from app.services.webhook import webhook_service
 from app.services.ocr import ocr_service
+from app.services.merchants import resolve_merchant
+from app.services.reports import place_expense
 from app.services.ai import ai_service
 from typing import List, Optional
 from datetime import datetime, date
@@ -212,6 +214,7 @@ def file_expense(
     receipt_ocr_text: str = Form(""),
     ocr_confidence: Optional[float] = Form(None),
     ai_confidence: Optional[float] = Form(None),
+    trip_id: Optional[uuid.UUID] = Form(None),
     file: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -253,10 +256,14 @@ def file_expense(
         submitted_at=datetime.utcnow(),
         category_manually_set=False,
         gl_override=False,
+        trip_id=trip_id,
     )
+    merchant = resolve_merchant(db, merchant_name)
+    if merchant:
+        db_expense.merchant_id = merchant.id
     db.add(db_expense)
     db.flush()
-    add_expense_to_report(db, db_expense)
+    place_expense(db, db_expense)
     db.commit()
     db.refresh(db_expense)
     return db_expense
@@ -315,11 +322,11 @@ def update_expense(
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
     
-    if expense.user_id != current_user.id:
+    if current_user.role != UserRole.ADMIN and expense.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
-    
-    if expense.status not in [ExpenseStatus.DRAFT, ExpenseStatus.REJECTED]:
-        raise HTTPException(status_code=400, detail="Cannot edit submitted/approved expenses")
+
+    if current_user.role != UserRole.ADMIN and expense.report is not None and expense.report.status not in (ReportStatus.DRAFT, ReportStatus.REJECTED):
+        raise HTTPException(status_code=400, detail="This report is with your supervisor")
     
     update_data = expense_update.model_dump(exclude_unset=True)
     
@@ -385,7 +392,11 @@ def submit_expense(
     
     expense.status = ExpenseStatus.PENDING
     expense.submitted_at = datetime.utcnow()
-    add_expense_to_report(db, expense)
+    if expense.merchant_name and expense.merchant_id is None:
+        merchant = resolve_merchant(db, expense.merchant_name)
+        if merchant:
+            expense.merchant_id = merchant.id
+    place_expense(db, expense)
     
     db.commit()
     db.refresh(expense)

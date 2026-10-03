@@ -21,6 +21,9 @@ class ExpenseStatus(str, enum.Enum):
 
 class ReportStatus(str, enum.Enum):
     DRAFT = "draft"
+    SUBMITTED = "submitted"
+    REJECTED = "rejected"
+    APPROVED = "approved"
     FINALIZED = "finalized"
 
 
@@ -35,13 +38,16 @@ class User(Base):
     department = Column(String(100))
     default_currency = Column(String(3), default="USD")
     is_active = Column(Boolean, default=True)
+    is_superuser = Column(Boolean, default=False)
+    supervisor_id = Column(Uuid(as_uuid=True), ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     expenses = relationship("Expense", back_populates="user", foreign_keys="Expense.user_id")
     approved_expenses = relationship("Expense", back_populates="approver", foreign_keys="Expense.approved_by")
-    expense_reports = relationship("ExpenseReport", back_populates="user")
+    expense_reports = relationship("ExpenseReport", back_populates="user", foreign_keys="ExpenseReport.user_id")
     audit_logs = relationship("AuditLog", back_populates="user")
+    supervisor = relationship("User", remote_side=[id], foreign_keys=[supervisor_id])
 
 
 class Category(Base):
@@ -119,6 +125,9 @@ class Expense(Base):
     location_lng = Column(Numeric(11, 8))
     
     gl_override = Column(Boolean, default=False)
+    merchant_id = Column(Uuid(as_uuid=True), ForeignKey("merchants.id"))
+    report_id = Column(Uuid(as_uuid=True), ForeignKey("expense_reports.id"))
+    trip_id = Column(Uuid(as_uuid=True), ForeignKey("trips.id"))
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -131,6 +140,9 @@ class Expense(Base):
     category = relationship("Category", back_populates="expenses", foreign_keys=[category_id])
     ai_suggested_category = relationship("Category", back_populates="ai_suggested_expenses", foreign_keys=[ai_suggested_category_id])
     gl_account = relationship("GLAccount", back_populates="expenses")
+    merchant = relationship("Merchant", back_populates="expenses")
+    report = relationship("ExpenseReport", back_populates="expenses")
+    trip = relationship("Trip", back_populates="expenses")
 
 
 class ExpenseReport(Base):
@@ -148,12 +160,19 @@ class ExpenseReport(Base):
     
     report_pdf_url = Column(String(500))
     report_csv_url = Column(String(500))
+    screenshot_url = Column(String(500))
+    title = Column(String(255))
+    review_notes = Column(Text)
+    reviewed_by = Column(Uuid(as_uuid=True), ForeignKey("users.id"))
     status = Column(SQLEnum(ReportStatus), nullable=False, default=ReportStatus.DRAFT)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     finalized_at = Column(DateTime)
+    submitted_at = Column(DateTime)
     
-    user = relationship("User", back_populates="expense_reports")
+    user = relationship("User", back_populates="expense_reports", foreign_keys=[user_id])
+    expenses = relationship("Expense", back_populates="report")
+    trips = relationship("Trip", back_populates="report", cascade="all, delete-orphan")
     category_breakdowns = relationship("ReportCategoryBreakdown", back_populates="report", cascade="all, delete-orphan")
 
 
@@ -169,6 +188,50 @@ class ReportCategoryBreakdown(Base):
     
     report = relationship("ExpenseReport", back_populates="category_breakdowns")
     category = relationship("Category", back_populates="report_breakdowns")
+
+
+class Merchant(Base):
+    __tablename__ = "merchants"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    aliases = relationship("MerchantAlias", back_populates="merchant", cascade="all, delete-orphan")
+    expenses = relationship("Expense", back_populates="merchant")
+
+
+class MerchantAlias(Base):
+    __tablename__ = "merchant_aliases"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    merchant_id = Column(Uuid(as_uuid=True), ForeignKey("merchants.id", ondelete="CASCADE"), nullable=False)
+    alias = Column(String(255), nullable=False, unique=True)
+
+    merchant = relationship("Merchant", back_populates="aliases")
+
+
+class Trip(Base):
+    __tablename__ = "trips"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_id = Column(Uuid(as_uuid=True), ForeignKey("expense_reports.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    report = relationship("ExpenseReport", back_populates="trips")
+    expenses = relationship("Expense", back_populates="trip")
+
+
+class Notice(Base):
+    __tablename__ = "notices"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    message = Column(Text, nullable=False)
+    report_id = Column(Uuid(as_uuid=True), ForeignKey("expense_reports.id"))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    read_at = Column(DateTime)
 
 
 class AuditLog(Base):
