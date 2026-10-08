@@ -20,9 +20,15 @@ import {
   useDeleteGLAccountMapping,
   useExpenseAccounts,
   useCreateExpenseAccount,
+  useReassignExpenseAccount,
   useUpdateGLAccountParent,
 } from '@/hooks/use-gl-accounts'
 import { Loader2, Trash2, Plus } from 'lucide-react'
+
+function detailFrom(error: unknown) {
+  const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+  return typeof detail === 'string' ? detail : 'That GL account was not saved.'
+}
 
 export default function GLAccountsPage() {
   const { data: glAccounts, isLoading: glLoading } = useGLAccounts()
@@ -34,7 +40,12 @@ export default function GLAccountsPage() {
 
   const { data: expenseAccounts } = useExpenseAccounts()
   const createAccount = useCreateExpenseAccount()
+  const reassignAccount = useReassignExpenseAccount()
   const updateParent = useUpdateGLAccountParent()
+  const [newGlFor, setNewGlFor] = useState<string | null>(null)
+  const [newCode, setNewCode] = useState('')
+  const [newName, setNewName] = useState('')
+  const [assignError, setAssignError] = useState('')
   const [accountName, setAccountName] = useState('')
   const [accountDescription, setAccountDescription] = useState('')
   const [glCode, setGlCode] = useState('')
@@ -102,7 +113,7 @@ export default function GLAccountsPage() {
       <div>
         <h1 className="text-3xl font-bold">Expense accounts</h1>
         <p className="text-muted-foreground">
-          Create the plain-text accounts people see, assign each one to a GL account, and roll sub-accounts up to a parent.
+          Create the plain-text accounts people see, assign each one to a GL account, and roll sub-accounts up to a parent. If a GL account changes or is removed, pick another one on the row. Receipts already filed stay on the account they were posted to.
         </p>
       </div>
 
@@ -151,13 +162,13 @@ export default function GLAccountsPage() {
             <Plus className="h-4 w-4 mr-2" />
             Create account
           </Button>
+          {assignError ? <p className="text-sm text-red-600">{assignError}</p> : null}
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Expense account</TableHead>
                 <TableHead>Used for</TableHead>
-                <TableHead>GL code</TableHead>
-                <TableHead>GL name</TableHead>
+                <TableHead>GL account</TableHead>
                 <TableHead>Rolls up to</TableHead>
               </TableRow>
             </TableHeader>
@@ -166,8 +177,66 @@ export default function GLAccountsPage() {
                 <TableRow key={account.category_id}>
                   <TableCell className="font-medium">{account.name}</TableCell>
                   <TableCell>{account.description || '—'}</TableCell>
-                  <TableCell>{account.gl_code || 'Not assigned'}</TableCell>
-                  <TableCell>{account.gl_name || 'Not assigned'}</TableCell>
+                  <TableCell>
+                    <select
+                      className="rounded-md border border-input bg-background px-3 py-1"
+                      value={newGlFor === account.category_id ? '__new__' : (account.gl_account_id || '')}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setAssignError('')
+                        if (value === '__new__') {
+                          setNewGlFor(account.category_id)
+                          setNewCode('')
+                          setNewName('')
+                          return
+                        }
+                        setNewGlFor(null)
+                        if (!value || value === account.gl_account_id) return
+                        reassignAccount.mutate(
+                          { categoryId: account.category_id, gl_account_id: value },
+                          { onError: (error) => setAssignError(detailFrom(error)) },
+                        )
+                      }}
+                    >
+                      <option value="">Choose a GL</option>
+                      {glAccounts?.map((gl) => (
+                        <option key={gl.id} value={gl.id}>
+                          {gl.account_code} - {gl.account_name}
+                        </option>
+                      ))}
+                      <option value="__new__">Enter a different GL…</option>
+                    </select>
+                    {account.removed_code ? (
+                      <p className="mt-1 text-sm text-amber-700">
+                        Was {account.removed_code}{account.removed_name ? ` ${account.removed_name}` : ''}. Choose the GL it should use now.
+                      </p>
+                    ) : null}
+                    {!account.gl_account_id && !account.removed_code ? (
+                      <p className="mt-1 text-sm text-amber-700">Not posted to a GL.</p>
+                    ) : null}
+                    {newGlFor === account.category_id ? (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <Input className="w-24" value={newCode} onChange={(event) => setNewCode(event.target.value)} placeholder="6410" />
+                        <Input className="w-48" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Travel expense" />
+                        <Button
+                          size="sm"
+                          disabled={!newCode.trim() || !newName.trim() || reassignAccount.isPending}
+                          onClick={() => {
+                            setAssignError('')
+                            reassignAccount.mutate(
+                              { categoryId: account.category_id, gl_code: newCode.trim(), gl_name: newName.trim() },
+                              {
+                                onSuccess: () => setNewGlFor(null),
+                                onError: (error) => setAssignError(detailFrom(error)),
+                              },
+                            )
+                          }}
+                        >
+                          Save GL
+                        </Button>
+                      </div>
+                    ) : null}
+                  </TableCell>
                   <TableCell>
                     {account.gl_account_id ? (
                       <select
@@ -190,7 +259,7 @@ export default function GLAccountsPage() {
                 </TableRow>
               )) : (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground">
+                  <TableCell colSpan={4} className="text-center text-muted-foreground">
                     No expense accounts yet
                   </TableCell>
                 </TableRow>

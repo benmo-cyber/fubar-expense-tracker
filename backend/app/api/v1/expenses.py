@@ -18,6 +18,7 @@ from app.services.ocr import ocr_service
 from app.services.merchants import resolve_merchant
 from app.services.reports import place_expense
 from app.services.ai import ai_service
+from app.services.gl_assign import posting_gl_id
 from typing import List, Optional
 from datetime import datetime, date
 from calendar import monthrange
@@ -173,8 +174,9 @@ def create_expense(
         mapping = db.query(GLAccountMapping).filter(
             GLAccountMapping.category_id == expense.category_id
         ).first()
-        if mapping:
-            gl_account_id = mapping.gl_account_id
+        gl_account = mapping.gl_account if mapping else None
+        if gl_account and posting_gl_id(str(gl_account.id), bool(gl_account.is_active)):
+            gl_account_id = gl_account.id
     
     db_expense = Expense(
         user_id=current_user.id,
@@ -226,7 +228,12 @@ def file_expense(
     mapping = db.query(GLAccountMapping).filter(
         GLAccountMapping.category_id == category.id
     ).first()
-    if not mapping:
+    gl_account = mapping.gl_account if mapping else None
+    gl_account_id = posting_gl_id(
+        str(gl_account.id) if gl_account else None,
+        bool(gl_account.is_active) if gl_account else False,
+    )
+    if not gl_account_id:
         raise HTTPException(status_code=400, detail="This expense account is not assigned to a GL account")
 
     receipt_url = None
@@ -245,7 +252,7 @@ def file_expense(
         merchant_name=merchant_name,
         expense_date=expense_date,
         category_id=category.id,
-        gl_account_id=mapping.gl_account_id,
+        gl_account_id=gl_account.id,
         receipt_url=receipt_url,
         receipt_ocr_text=receipt_ocr_text or None,
         ocr_confidence=ocr_confidence,

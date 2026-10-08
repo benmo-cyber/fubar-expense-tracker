@@ -7,6 +7,7 @@ from app.schemas import (
     GLAccountMappingCreate, GLAccountMappingResponse, GLAccountMappingDetail
 )
 from app.middleware.auth import get_current_admin_user, get_current_user
+from app.services.gl_assign import AssignError, choose_reassignment, expense_account_gl, links_released_by_removal
 from app.services.gl_rollup import ParentLinkError, normalize_parent_request, validate_parent
 from pydantic import BaseModel
 from typing import List, Optional
@@ -83,6 +84,36 @@ class ExpenseAccountOut(BaseModel):
     parent_id: Optional[UUID4] = None
     parent_code: Optional[str] = None
     parent_name: Optional[str] = None
+    removed_code: Optional[str] = None
+    removed_name: Optional[str] = None
+
+
+class ExpenseAccountAssign(BaseModel):
+    gl_account_id: Optional[UUID4] = None
+    gl_code: Optional[str] = None
+    gl_name: Optional[str] = None
+
+
+def _account_view(category: Category) -> ExpenseAccountOut:
+    mapping = category.gl_mapping
+    account = mapping.gl_account if mapping else None
+    parent = account.parent if account else None
+    shown = expense_account_gl(None if account is None else {
+        "id": account.id,
+        "code": account.account_code,
+        "name": account.account_name,
+        "is_active": bool(account.is_active),
+        "parent_id": parent.id if parent else None,
+        "parent_code": parent.account_code if parent else None,
+        "parent_name": parent.account_name if parent else None,
+        "parent_active": bool(parent.is_active) if parent else False,
+    })
+    return ExpenseAccountOut(
+        category_id=category.id,
+        name=category.name,
+        description=category.description,
+        **shown,
+    )
 
 
 @router.get("/expense-accounts", response_model=List[ExpenseAccountOut])
@@ -91,23 +122,7 @@ def list_expense_accounts(
     db: Session = Depends(get_db)
 ):
     categories = db.query(Category).filter(Category.is_active == True).order_by(Category.name).all()
-    results = []
-    for category in categories:
-        mapping = category.gl_mapping
-        account = mapping.gl_account if mapping else None
-        parent = account.parent if account else None
-        results.append(ExpenseAccountOut(
-            category_id=category.id,
-            name=category.name,
-            description=category.description,
-            gl_account_id=account.id if account else None,
-            gl_code=account.account_code if account else None,
-            gl_name=account.account_name if account else None,
-            parent_id=parent.id if parent else None,
-            parent_code=parent.account_code if parent else None,
-            parent_name=parent.account_name if parent else None,
-        ))
-    return results
+    return [_account_view(category) for category in categories]
 
 
 @router.post("/expense-accounts", response_model=ExpenseAccountOut, status_code=status.HTTP_201_CREATED)
@@ -158,19 +173,61 @@ def create_expense_account(
     db.add(mapping)
     db.commit()
     db.refresh(category)
-    db.refresh(gl_account)
-    parent = gl_account.parent
-    return ExpenseAccountOut(
-        category_id=category.id,
-        name=category.name,
-        description=category.description,
-        gl_account_id=gl_account.id,
-        gl_code=gl_account.account_code,
-        gl_name=gl_account.account_name,
-        parent_id=parent.id if parent else None,
-        parent_code=parent.account_code if parent else None,
-        parent_name=parent.account_name if parent else None,
-    )
+    return _account_view(category)
+
+
+@router.put("/expense-accounts/{category_id}", response_model=ExpenseAccountOut)
+def reassign_expense_account(
+    category_id: uuid.UUID,
+    body: ExpenseAccountAssign,
+    current_user = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    category = db.query(Category).filter(Category.id == category_id, Category.is_active == True).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Expense account not found")
+
+    accounts = db.query(GLAccount).all()
+    known = [
+        {
+            "id": str(account.id),
+            "code": account.account_code,
+            "name": account.account_name,
+            "is_active": bool(account.is_active),
+        }
+        for account in accounts
+    ]
+    try:
+        choice = choose_reassignment(
+            str(body.gl_account_id) if body.gl_account_id else None,
+            body.gl_code,
+            body.gl_name,
+            known,
+        )
+    except AssignError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    by_id = {str(account.id): account for account in accounts}
+    if choice["kind"] == "create":
+        gl_account = GLAccount(account_code=choice["code"], account_name=choice["name"], is_active=True)
+        db.add(gl_account)
+        db.flush()
+    else:
+        gl_account = by_id[choice["id"]]
+        if choice["kind"] == "reactivate":
+            gl_account.is_active = True
+            if choice.get("name"):
+                gl_account.account_name = choice["name"]
+
+    mapping = category.gl_mapping
+    if mapping is None:
+        mapping = GLAccountMapping(category_id=category.id, gl_account_id=gl_account.id)
+        db.add(mapping)
+    else:
+        mapping.gl_account_id = gl_account.id
+    db.commit()
+    db.refresh(category)
+    return _account_view(category)
 
 
 @router.get("/mappings", response_model=List[GLAccountMappingDetail])
@@ -288,7 +345,17 @@ def delete_gl_account(
     account = db.query(GLAccount).filter(GLAccount.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="GL Account not found")
-    
+
+    grouped: dict[str, list[str]] = {}
+    mapping_rows = {str(mapping.id): mapping for mapping in db.query(GLAccountMapping).all()}
+    for mapping in mapping_rows.values():
+        grouped.setdefault(str(mapping.gl_account_id), []).append(str(mapping.id))
+    drop_ids, child_ids = links_released_by_removal(str(account.id), grouped, parent_map(db))
+    for mapping_id in drop_ids:
+        db.delete(mapping_rows[mapping_id])
+    children = {str(row.id): row for row in db.query(GLAccount).all()}
+    for child_id in child_ids:
+        children[child_id].parent_id = None
     account.is_active = False
     db.commit()
     return None

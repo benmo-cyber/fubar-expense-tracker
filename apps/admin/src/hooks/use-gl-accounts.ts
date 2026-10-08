@@ -32,6 +32,8 @@ export type ExpenseAccount = {
   parent_id?: string
   parent_code?: string
   parent_name?: string
+  removed_code?: string
+  removed_name?: string
 }
 
 export function useExpenseAccounts() {
@@ -64,6 +66,37 @@ export function useCreateExpenseAccount() {
       queryClient.invalidateQueries({ queryKey: ['categories'] })
       queryClient.invalidateQueries({ queryKey: ['gl-accounts'] })
       queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+    },
+  })
+}
+
+export function useReassignExpenseAccount() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({
+      categoryId,
+      gl_account_id,
+      gl_code,
+      gl_name,
+    }: {
+      categoryId: string
+      gl_account_id?: string
+      gl_code?: string
+      gl_name?: string
+    }) => {
+      const { data } = await api.put<ExpenseAccount>(`/gl-accounts/expense-accounts/${categoryId}`, {
+        gl_account_id,
+        gl_code,
+        gl_name,
+      })
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['gl-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-insights'] })
     },
   })
 }
@@ -120,6 +153,7 @@ export function useUpdateGLAccountMapping() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
     },
   })
 }
@@ -133,6 +167,7 @@ export function useDeleteGLAccountMapping() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
     },
   })
 }
