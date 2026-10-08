@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     FIRST_ADMIN_EMAIL: str = ""
     FIRST_ADMIN_PASSWORD: str = ""
     FIRST_ADMIN_NAME: str = "Admin"
+
+    PUBLIC_APP_URL: str = ""
+    EMAIL_HOST: str = "smtp.office365.com"
+    EMAIL_PORT: int = 587
+    EMAIL_USE_TLS: bool = True
+    EMAIL_HOST_USER: str = ""
+    EMAIL_HOST_PASSWORD: str = ""
+    DEFAULT_FROM_EMAIL: str = ""
     
     # Static files serving
     SERVE_ADMIN_PORTAL: bool = True

@@ -39,6 +39,7 @@ class User(Base):
     default_currency = Column(String(3), default="USD")
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
+    must_change_password = Column(Boolean, default=False, nullable=False)
     supervisor_id = Column(Uuid(as_uuid=True), ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

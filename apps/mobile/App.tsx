@@ -87,7 +87,7 @@ type ReportRow = {
 }
 type Notice = { id: string; message: string; read: boolean }
 type Summary = { spend: number; open_reports: number; awaiting_review: number; by_gl: Split[]; by_merchant: Split[] }
-type Profile = { id: string; email: string; full_name: string; role: string }
+type Profile = { id: string; email: string; full_name: string; role: string; must_change_password?: boolean }
 type Person = {
   id: string
   email: string
@@ -235,6 +235,11 @@ export default function App() {
   const [inviteRole, setInviteRole] = useState("sales")
   const [inviteSupervisor, setInviteSupervisor] = useState("")
   const [issuedPassword, setIssuedPassword] = useState("")
+  const [mustChange, setMustChange] = useState(false)
+  const [forgotMode, setForgotMode] = useState(false)
+  const [forgotNotice, setForgotNotice] = useState("")
+  const [nextPassword, setNextPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
   const [renameId, setRenameId] = useState("")
   const [renameValue, setRenameValue] = useState("")
   const [mergeSource, setMergeSource] = useState("")
@@ -281,8 +286,9 @@ export default function App() {
         if (!token) return
         const me = await api<Profile>("/auth/me")
         setProfile(me)
+        setMustChange(Boolean(me.must_change_password))
         setSignedIn(true)
-        await loadData(me.role === "admin")
+        if (!me.must_change_password) await loadData(me.role === "admin")
       })
       .catch(async () => {
         await clearToken()
@@ -295,16 +301,17 @@ export default function App() {
     setLoginError("")
     setBusy(true)
     try {
-      const result = await api<{ access_token: string }>("/auth/login", {
+      const result = await api<{ access_token: string; must_change_password?: boolean }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
       })
       await setToken(result.access_token)
       const me = await api<Profile>("/auth/me")
       setProfile(me)
+      setMustChange(Boolean(result.must_change_password || me.must_change_password))
       setSignedIn(true)
       setScreen("home")
-      await loadData(me.role === "admin")
+      if (!(result.must_change_password || me.must_change_password)) await loadData(me.role === "admin")
     } catch (error) {
       const message = error instanceof Error ? error.message : ""
       setLoginError(message.includes("401") || message.toLowerCase().includes("password")
@@ -312,6 +319,57 @@ export default function App() {
         : "The phone could not reach the server. Try again in a moment.")
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function requestReset() {
+    setLoginError("")
+    setForgotNotice("")
+    setBusy(true)
+    try {
+      const result = await api<{ message: string }>("/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      })
+      setForgotNotice(result.message)
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "The reset could not be requested.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveNewPassword() {
+    setLoginError("")
+    setBusy(true)
+    try {
+      await api("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: password,
+          new_password: nextPassword,
+          confirm_password: confirmPassword,
+        }),
+      })
+      setMustChange(false)
+      setPassword("")
+      setNextPassword("")
+      setConfirmPassword("")
+      if (profile) await loadData(profile.role === "admin")
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "The password was not changed.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function issuePassword(person: Person) {
+    setIssuedPassword("")
+    try {
+      const created = await api<{ temporary_password: string }>(`/people/${person.id}/temporary-password`, { method: "POST" })
+      setIssuedPassword(created.temporary_password)
+    } catch (error) {
+      Alert.alert("Password", error instanceof Error ? error.message : "A temporary password was not issued.")
     }
   }
 
@@ -728,6 +786,29 @@ export default function App() {
     )
   }
 
+  if (signedIn && mustChange) {
+    return (
+      <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <StatusBar style="dark" />
+        <View style={styles.form}>
+          <Image source={require("./assets/wildwood-logo.png")} style={styles.loginLogo} />
+          <Text style={styles.wordmark}>FUBAR</Text>
+          <Text style={styles.hint}>The temporary password works once. Pick your own to continue.</Text>
+          <Text style={styles.label}>Temporary password</Text>
+          <TextInput value={password} onChangeText={setPassword} secureTextEntry style={styles.input} />
+          <Text style={styles.label}>New password</Text>
+          <TextInput value={nextPassword} onChangeText={setNextPassword} secureTextEntry style={styles.input} />
+          <Text style={styles.label}>Confirm password</Text>
+          <TextInput value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry style={styles.input} />
+          {loginError ? <Text style={styles.error}>{loginError}</Text> : null}
+          <Pressable style={styles.primary} onPress={() => void saveNewPassword()}>
+            <Text style={styles.primaryText}>Save password</Text>
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+    )
+  }
+
   if (!signedIn) {
     return (
       <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -738,12 +819,31 @@ export default function App() {
           <Text style={styles.hint}>Expense reports for Wildwood Ingredients.</Text>
           <Text style={styles.label}>Email</Text>
           <TextInput value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" style={styles.input} />
-          <Text style={styles.label}>Password</Text>
-          <TextInput value={password} onChangeText={setPassword} secureTextEntry style={styles.input} />
-          {loginError ? <Text style={styles.error}>{loginError}</Text> : null}
-          <Pressable style={styles.primary} onPress={() => void signIn()}>
-            <Text style={styles.primaryText}>Sign in</Text>
-          </Pressable>
+          {forgotMode ? (
+            <>
+              <Text style={styles.hint}>We will email a reset link if that account exists.</Text>
+              {forgotNotice ? <Text style={styles.hint}>{forgotNotice}</Text> : null}
+              {loginError ? <Text style={styles.error}>{loginError}</Text> : null}
+              <Pressable style={styles.primary} onPress={() => void requestReset()}>
+                <Text style={styles.primaryText}>Send reset link</Text>
+              </Pressable>
+              <Pressable onPress={() => { setForgotMode(false); setLoginError(""); setForgotNotice("") }}>
+                <Text style={styles.linkText}>Back to sign in</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Text style={styles.label}>Password</Text>
+              <TextInput value={password} onChangeText={setPassword} secureTextEntry style={styles.input} />
+              {loginError ? <Text style={styles.error}>{loginError}</Text> : null}
+              <Pressable style={styles.primary} onPress={() => void signIn()}>
+                <Text style={styles.primaryText}>Sign in</Text>
+              </Pressable>
+              <Pressable onPress={() => { setForgotMode(true); setLoginError("") }}>
+                <Text style={styles.linkText}>Forgot password?</Text>
+              </Pressable>
+            </>
+          )}
         </View>
       </KeyboardAvoidingView>
     )
@@ -952,6 +1052,7 @@ export default function App() {
           {chartPerson === person.id ? (
             <View style={[styles.card, { marginLeft: depth * 16 }]}>
               <Text style={styles.meta}>{person.email}</Text>
+              {issuedPassword && chartPerson === person.id ? <Text style={styles.detailValue}>Temporary password, shown once: {issuedPassword}</Text> : null}
               {renameId === person.id ? <TextInput value={renameValue} onChangeText={setRenameValue} style={styles.input} /> : null}
               <View style={styles.rowButtons}>
                 <Pressable
@@ -973,6 +1074,9 @@ export default function App() {
                   <Text style={styles.secondaryText}>{person.role === "admin" ? "Make sales" : "Make admin"}</Text>
                 </Pressable>
               </View>
+              <Pressable style={styles.secondary} onPress={() => void issuePassword(person)}>
+                <Text style={styles.secondaryText}>Issue temporary password</Text>
+              </Pressable>
               {person.id !== profile?.id ? (
                 <Pressable style={styles.secondary} onPress={() => void patchPerson(person, { is_active: !person.is_active })}>
                   <Text style={styles.secondaryText}>{person.is_active ? "Deactivate" : "Reactivate"}</Text>
@@ -1289,6 +1393,7 @@ const styles = StyleSheet.create({
   brandSub: { color: "#BFDBFE", fontSize: 12, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1 },
   wordmark: { marginTop: 8, textAlign: "center", color: "#0B3D73", fontSize: 28, fontWeight: "900", letterSpacing: 4 },
   signOut: { color: "#BFDBFE", fontWeight: "700" },
+  linkText: { color: "#1D6FE8", fontWeight: "700", textAlign: "center" },
   navRow: { gap: 8, paddingTop: 12 },
   navPill: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: "rgba(255,255,255,0.12)" },
   navPillOn: { backgroundColor: "#ffffff" },

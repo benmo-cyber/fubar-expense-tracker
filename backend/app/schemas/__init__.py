@@ -28,6 +28,7 @@ class Token(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    must_change_password: bool = False
 
 
 class TokenPayload(BaseModel):
@@ -56,6 +57,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     id: UUID4
     is_active: bool
+    must_change_password: bool = False
     created_at: datetime
     updated_at: datetime
     

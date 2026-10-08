@@ -67,49 +67,173 @@ function Layout({ children, onSignOut }: { children: React.ReactNode; onSignOut:
   )
 }
 
-function LoginScreen({ onSuccess }: { onSuccess: () => void }) {
-  const [email, setEmail] = useState('admin@example.com')
+function AuthCard({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#F4F7FB] p-6">
+      <div className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-8 shadow-sm">
+        <img src="/wildwood-logo.png?v=2" alt="Wildwood Ingredients" className="mx-auto h-36 w-auto" />
+        <div className="text-center">
+          <p className="text-sm font-black tracking-[0.28em] text-[#1D6FE8]">FUBAR</p>
+          <h1 className="text-2xl font-bold text-[#0B3D73]">{title}</h1>
+          <p className="text-sm text-muted-foreground">{subtitle}</p>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function LoginScreen({ onSuccess }: { onSuccess: (mustChange: boolean) => void }) {
+  const resetToken = new URLSearchParams(window.location.search).get('token') || ''
+  const [mode, setMode] = useState<'sign-in' | 'forgot' | 'reset'>(
+    window.location.pathname === '/reset' || resetToken ? 'reset' : window.location.pathname === '/forgot' ? 'forgot' : 'sign-in'
+  )
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setError('')
+    try {
+      const { data } = await api.post<{ access_token: string; must_change_password: boolean }>('/auth/login', { email, password })
+      localStorage.setItem('access_token', data.access_token)
+      onSuccess(Boolean(data.must_change_password))
+    } catch {
+      setError('Those credentials were not accepted.')
+    }
+  }
+
+  async function sendReset(event: React.FormEvent) {
+    event.preventDefault()
+    setError('')
+    try {
+      const { data } = await api.post<{ message: string }>('/auth/forgot-password', { email })
+      setNotice(data.message)
+    } catch {
+      setError('The reset could not be requested.')
+    }
+  }
+
+  async function choosePassword(event: React.FormEvent) {
+    event.preventDefault()
+    setError('')
+    try {
+      await api.post('/auth/reset-password', { token: resetToken, new_password: password, confirm_password: confirm })
+      window.history.replaceState({}, '', '/')
+      setPassword('')
+      setConfirm('')
+      setNotice('Password saved. Sign in with it.')
+      setMode('sign-in')
+    } catch {
+      setError('That reset link is invalid, or the passwords do not match.')
+    }
+  }
+
+  if (mode === 'forgot') {
+    return (
+      <AuthCard title="Forgot password" subtitle="We will email a reset link if that account exists.">
+        <form onSubmit={sendReset} className="space-y-4">
+          <div>
+            <Label>Email</Label>
+            <Input className="mt-1" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+          </div>
+          {notice ? <p className="text-sm text-[#0B3D73]">{notice}</p> : null}
+          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          <Button type="submit" className="w-full bg-[#1D6FE8] hover:bg-[#0B4F8A]">Send reset link</Button>
+          <button type="button" className="w-full text-sm text-[#1D6FE8]" onClick={() => { setMode('sign-in'); setNotice(''); setError('') }}>Back to sign in</button>
+        </form>
+      </AuthCard>
+    )
+  }
+
+  if (mode === 'reset') {
+    return (
+      <AuthCard title="Choose a password" subtitle="Use at least 8 characters.">
+        <form onSubmit={choosePassword} className="space-y-4">
+          <div>
+            <Label>New password</Label>
+            <Input className="mt-1" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          </div>
+          <div>
+            <Label>Confirm password</Label>
+            <Input className="mt-1" type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} required />
+          </div>
+          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          <Button type="submit" className="w-full bg-[#1D6FE8] hover:bg-[#0B4F8A]">Save password</Button>
+        </form>
+      </AuthCard>
+    )
+  }
+
+  return (
+    <AuthCard title="Expenses" subtitle="Sign in to review spending.">
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <Label>Email</Label>
+          <Input className="mt-1" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+        </div>
+        <div>
+          <Label>Password</Label>
+          <Input className="mt-1" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+        </div>
+        {notice ? <p className="text-sm text-[#0B3D73]">{notice}</p> : null}
+        {error ? <p className="text-sm text-red-600">{error}</p> : null}
+        <Button type="submit" className="w-full bg-[#1D6FE8] hover:bg-[#0B4F8A]">Sign in</Button>
+        <button type="button" className="w-full text-sm text-[#1D6FE8]" onClick={() => { setMode('forgot'); setError(''); setNotice('') }}>Forgot password?</button>
+      </form>
+    </AuthCard>
+  )
+}
+
+function ChangePasswordScreen({ onDone }: { onDone: () => void }) {
+  const [current, setCurrent] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     setError('')
     try {
-      const { data } = await api.post<{ access_token: string }>('/auth/login', { email, password })
-      localStorage.setItem('access_token', data.access_token)
-      onSuccess()
+      await api.post('/auth/change-password', {
+        current_password: current,
+        new_password: password,
+        confirm_password: confirm,
+      })
+      onDone()
     } catch {
-      setError('Those credentials were not accepted.')
+      setError('Check the temporary password, and make the new one at least 8 characters.')
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#F4F7FB] p-6">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-8 shadow-sm">
-        <img src="/wildwood-logo.png?v=2" alt="Wildwood Ingredients" className="mx-auto h-36 w-auto" />
-        <div className="text-center">
-          <p className="text-sm font-black tracking-[0.28em] text-[#1D6FE8]">FUBAR</p>
-          <h1 className="text-2xl font-bold text-[#0B3D73]">Expenses</h1>
-          <p className="text-sm text-muted-foreground">Sign in to review spending.</p>
+    <AuthCard title="Choose a password" subtitle="The temporary password works once. Pick your own to continue.">
+      <form onSubmit={submit} className="space-y-4">
+        <div>
+          <Label>Temporary password</Label>
+          <Input className="mt-1" type="password" value={current} onChange={(event) => setCurrent(event.target.value)} required />
         </div>
         <div>
-          <Label>Email</Label>
-          <Input className="mt-1" value={email} onChange={(event) => setEmail(event.target.value)} />
+          <Label>New password</Label>
+          <Input className="mt-1" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
         </div>
         <div>
-          <Label>Password</Label>
-          <Input className="mt-1" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+          <Label>Confirm password</Label>
+          <Input className="mt-1" type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} required />
         </div>
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
-        <Button type="submit" className="w-full bg-[#1D6FE8] hover:bg-[#0B4F8A]">Sign in</Button>
+        <Button type="submit" className="w-full bg-[#1D6FE8] hover:bg-[#0B4F8A]">Save password</Button>
       </form>
-    </div>
+    </AuthCard>
   )
 }
 
 function App() {
   const [authed, setAuthed] = useState<boolean | null>(null)
+  const [mustChange, setMustChange] = useState(false)
 
   useEffect(() => {
     const token = localStorage.getItem('access_token')
@@ -117,8 +241,11 @@ function App() {
       setAuthed(false)
       return
     }
-    api.get('/auth/me')
-      .then(() => setAuthed(true))
+    api.get<{ must_change_password?: boolean }>('/auth/me')
+      .then(({ data }) => {
+        setMustChange(Boolean(data.must_change_password))
+        setAuthed(true)
+      })
       .catch(() => {
         localStorage.removeItem('access_token')
         setAuthed(false)
@@ -130,7 +257,11 @@ function App() {
   }
 
   if (!authed) {
-    return <LoginScreen onSuccess={() => setAuthed(true)} />
+    return <LoginScreen onSuccess={(change) => { setMustChange(change); setAuthed(true) }} />
+  }
+
+  if (mustChange) {
+    return <ChangePasswordScreen onDone={() => setMustChange(false)} />
   }
 
   return (

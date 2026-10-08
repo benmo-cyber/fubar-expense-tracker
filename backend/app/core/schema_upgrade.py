@@ -7,6 +7,7 @@ COLUMN_PATCHES = {
     "users": {
         "is_superuser": "BOOLEAN DEFAULT 0",
         "supervisor_id": "CHAR(32)",
+        "must_change_password": "BOOLEAN DEFAULT 0",
     },
     "expenses": {
         "merchant_id": "CHAR(32)",

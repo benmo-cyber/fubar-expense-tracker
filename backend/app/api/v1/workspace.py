@@ -4,7 +4,6 @@ from pathlib import Path
 import csv
 import io
 import re
-import secrets
 import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -13,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_password_hash
+from app.services.passwords import generate_temp_password, must_change_after_issue
 from app.middleware.auth import get_current_admin_user, get_current_user
 from app.models import (
     Expense, ExpenseReport, Merchant, Notice, ReportStatus, Trip, User, UserRole,
@@ -194,13 +194,14 @@ def invite_person(body: PersonIn, current_user: User = Depends(get_current_admin
         raise HTTPException(status_code=400, detail="That email is already in use")
     role = UserRole.ADMIN if body.role == "admin" else UserRole.SALES
     supervisor_id = body.supervisor_id or current_user.id
-    temporary_password = secrets.token_urlsafe(8)
+    temporary_password = generate_temp_password()
     user = User(
         email=body.email.lower(),
         full_name=body.full_name.strip(),
         hashed_password=get_password_hash(temporary_password),
         role=role,
         is_active=True,
+        must_change_password=True,
         supervisor_id=supervisor_id,
     )
     db.add(user)
@@ -229,6 +230,20 @@ def update_person(user_id: uuid.UUID, body: PersonPatch, current_user: User = De
     db.commit()
     db.refresh(user)
     return person_dict(user)
+
+
+@router.post("/people/{user_id}/temporary-password")
+def issue_temporary_password(user_id: uuid.UUID, current_user: User = Depends(get_current_admin_user), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Reactivate this person before issuing a password")
+    temporary_password = generate_temp_password()
+    user.hashed_password = get_password_hash(temporary_password)
+    user.must_change_password = must_change_after_issue(current_user.id, user.id)
+    db.commit()
+    return {"temporary_password": temporary_password, "must_change_password": bool(user.must_change_password)}
 
 
 @router.get("/merchants")

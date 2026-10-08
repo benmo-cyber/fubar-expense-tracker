@@ -124,6 +124,17 @@ export default function People() {
     }
   }
 
+  async function issuePassword(person: Person) {
+    setError('')
+    setIssuedPassword('')
+    try {
+      const { data } = await api.post<{ temporary_password: string }>(`/people/${person.id}/temporary-password`)
+      setIssuedPassword(data.temporary_password)
+    } catch {
+      setError('A temporary password was not issued.')
+    }
+  }
+
   async function save(person: Person, patch: Partial<Person>) {
     setError('')
     try {
@@ -178,7 +189,7 @@ export default function People() {
                 <Button type="submit">Create account</Button>
               </div>
             </form>
-            {issuedPassword ? <p className="mt-4 text-sm">Temporary password, shown once: <strong>{issuedPassword}</strong></p> : null}
+            {issuedPassword && showInvite ? <p className="mt-4 text-sm">Temporary password, shown once: <strong>{issuedPassword}</strong></p> : null}
           </CardContent>
         </Card>
       ) : null}
@@ -187,7 +198,7 @@ export default function People() {
         {roots.length > 0 ? (
           <ul className="org-tree">
             {roots.map((person) => (
-              <OrgNode key={person.id} person={person} people={people} selectedId={selectedId} onSelect={setSelectedId} trail={[]} />
+              <OrgNode key={person.id} person={person} people={people} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setIssuedPassword('') }} trail={[]} />
             ))}
           </ul>
         ) : (
@@ -201,6 +212,7 @@ export default function People() {
             <div>
               <p className="text-lg font-semibold text-[#0B3D73]">{selected.full_name}</p>
               <p className="text-sm text-muted-foreground">{selected.email}</p>
+              {issuedPassword ? <p className="mt-2 text-sm">Temporary password, shown once: <strong>{issuedPassword}</strong></p> : null}
               <div className="mt-3 flex flex-wrap items-end gap-2">
                 <div>
                   <Label>Name</Label>
@@ -231,6 +243,7 @@ export default function People() {
                   ))}
                 </select>
               </div>
+              <Button variant="outline" onClick={() => void issuePassword(selected)}>Issue temporary password</Button>
               <Button variant="outline" onClick={() => void save(selected, { role: selected.role === 'admin' ? 'sales' : 'admin' })}>
                 Make {selected.role === 'admin' ? 'salesperson' : 'admin'}
               </Button>

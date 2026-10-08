@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -11,6 +11,7 @@ security = HTTPBearer()
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
@@ -41,6 +42,10 @@ async def get_current_user(
     
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+
+    allowed = {"/api/v1/auth/me", "/api/v1/auth/change-password"}
+    if user.must_change_password and request.url.path not in allowed:
+        raise HTTPException(status_code=403, detail="Choose a new password before continuing")
     
     return user
 
@@ -57,6 +62,7 @@ async def get_current_admin_user(
 
 
 async def get_optional_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
 ) -> Optional[User]:
@@ -64,6 +70,6 @@ async def get_optional_user(
         return None
     
     try:
-        return await get_current_user(credentials, db)
+        return await get_current_user(request, credentials, db)
     except HTTPException:
         return None
