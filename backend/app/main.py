@@ -62,24 +62,28 @@ def seed_local_users():
     ensure_schema()
     db = SessionLocal()
     try:
-        if not db.query(User).first():
+        from app.core.bootstrap import planned_users
+
+        roles = {"admin": UserRole.ADMIN, "operations": UserRole.OPERATIONS}
+        for person in planned_users(
+            settings.ENVIRONMENT,
+            db.query(User).first() is not None,
+            settings.FIRST_ADMIN_EMAIL,
+            settings.FIRST_ADMIN_PASSWORD,
+            settings.FIRST_ADMIN_NAME,
+        ):
             db.add(User(
-                email="admin@example.com",
-                hashed_password=get_password_hash("AdminPass1"),
-                full_name="Admin",
-                role=UserRole.ADMIN,
+                email=person["email"],
+                hashed_password=get_password_hash(person["password"]),
+                full_name=person["full_name"],
+                role=roles[person["role"]],
                 is_active=True,
-                is_superuser=True,
+                is_superuser=person["role"] == "admin",
             ))
-            db.add(User(
-                email="field@example.com",
-                hashed_password=get_password_hash("FieldPass1"),
-                full_name="Field User",
-                role=UserRole.OPERATIONS,
-                is_active=True,
-            ))
-            db.commit()
-        admin_user = db.query(User).filter(User.email == "admin@example.com").first()
+        db.commit()
+        admin_user = db.query(User).filter(User.is_superuser.is_(True)).first()
+        if admin_user is None:
+            admin_user = db.query(User).filter(User.email == "admin@example.com").first()
         if admin_user and not admin_user.is_superuser:
             admin_user.is_superuser = True
         if admin_user:

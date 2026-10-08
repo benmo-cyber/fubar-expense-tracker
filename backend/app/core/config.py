@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
+    FIRST_ADMIN_EMAIL: str = ""
+    FIRST_ADMIN_PASSWORD: str = ""
+    FIRST_ADMIN_NAME: str = "Admin"
     
     # Static files serving
     SERVE_ADMIN_PORTAL: bool = True

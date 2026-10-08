@@ -326,27 +326,7 @@ export default function App() {
     return accounts.find((account) => account.category_id === draft.categoryId)
   }
 
-  async function scanReceipt() {
-    if (accounts.length === 0) {
-      Alert.alert(
-        "No expense accounts",
-        "Create an expense account and assign it to a GL account first."
-      )
-      return
-    }
-    const permission = await ImagePicker.requestCameraPermissionsAsync()
-    const result = permission.granted
-      ? await ImagePicker.launchCameraAsync({
-          mediaTypes: ["images"],
-          quality: 0.9,
-        })
-      : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ["images"],
-          quality: 0.9,
-        })
-    if (result.canceled || !result.assets[0]) return
-
-    const asset = result.assets[0]
+  async function readReceipt(asset: ImagePicker.ImagePickerAsset) {
     const token = await getToken()
     setBusy(true)
     try {
@@ -377,10 +357,52 @@ export default function App() {
       })
       setScreen("review")
     } catch (error) {
-      Alert.alert("Scan failed", error instanceof Error ? error.message : "The receipt could not be read.")
+      Alert.alert("Could not read that image", error instanceof Error ? error.message : "The receipt could not be read.")
     } finally {
       setBusy(false)
     }
+  }
+
+  async function scanReceipt() {
+    if (accounts.length === 0) {
+      Alert.alert(
+        "No expense accounts",
+        "Create an expense account and assign it to a GL account first."
+      )
+      return
+    }
+    const permission = await ImagePicker.requestCameraPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert("Camera", "Allow the camera to scan a receipt, or use Add screenshot to pick a photo.")
+      return
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      quality: 0.9,
+    })
+    if (result.canceled || !result.assets[0]) return
+    await readReceipt(result.assets[0])
+  }
+
+  async function addScreenshot() {
+    if (accounts.length === 0) {
+      Alert.alert(
+        "No expense accounts",
+        "Create an expense account and assign it to a GL account first."
+      )
+      return
+    }
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!permission.granted) {
+      Alert.alert("Photos", "Allow photo access to add a screenshot.")
+      return
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.9,
+    })
+    if (result.canceled || !result.assets[0]) return
+    await readReceipt(result.assets[0])
   }
 
   function openManual() {
@@ -501,32 +523,6 @@ export default function App() {
       })
     } catch (error) {
       Alert.alert("Download", error instanceof Error ? error.message : "The file could not be saved.")
-    }
-  }
-
-  async function attachScreenshot() {
-    if (!activeReport) return
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.9 })
-    if (result.canceled || !result.assets[0]) return
-    const asset = result.assets[0]
-    const token = await getToken()
-    setBusy(true)
-    try {
-      const upload = await new File(asset.uri).upload(`${API_URL}/reports/${activeReport.id}/screenshot`, {
-        uploadType: UploadType.MULTIPART,
-        fieldName: "file",
-        mimeType: asset.mimeType || "image/jpeg",
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          "Bypass-Tunnel-Reminder": "true",
-        },
-      })
-      if (upload.status < 200 || upload.status >= 300) throw new Error(upload.body || "Upload failed")
-      setActiveReport(JSON.parse(upload.body) as ReportRow)
-    } catch (error) {
-      Alert.alert("Screenshot", error instanceof Error ? error.message : "The image was not saved.")
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -903,7 +899,7 @@ export default function App() {
           <Pressable style={styles.secondary} onPress={() => void addTrip()}>
             <Text style={styles.secondaryText}>Add trip</Text>
           </Pressable>
-          <Pressable style={styles.secondary} onPress={() => void attachScreenshot()}>
+          <Pressable style={styles.secondary} onPress={() => void addScreenshot()}>
             <Text style={styles.secondaryText}>Add screenshot</Text>
           </Pressable>
           {canSubmit ? (
@@ -1258,6 +1254,9 @@ export default function App() {
         )}
         <Pressable style={styles.primary} onPress={() => void scanReceipt()}>
           <Text style={styles.primaryText}>Scan receipt</Text>
+        </Pressable>
+        <Pressable style={styles.secondary} onPress={() => void addScreenshot()}>
+          <Text style={styles.secondaryText}>Add screenshot</Text>
         </Pressable>
         <Pressable style={styles.secondary} onPress={openManual}>
           <Text style={styles.secondaryText}>Enter manually</Text>
