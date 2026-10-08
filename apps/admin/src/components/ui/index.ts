@@ -1,2 +1,2 @@
-# Additional component
+// Additional component
 export { Checkbox } from "./checkbox"
