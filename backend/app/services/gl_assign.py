@@ -1,4 +1,5 @@
 """Point an expense account at a GL account, and release one that was removed."""
+from app.services.gl_rollup import parent_code_for
 
 
 class AssignError(ValueError):
@@ -87,6 +88,23 @@ def choose_reassignment(
     if not name:
         raise AssignError("Enter a name for the GL account.")
     return {"kind": "create", "code": code, "name": name}
+
+
+def revised_gl(code: str, name: str, other_codes: set[str]) -> tuple[str, str]:
+    """Correct a GL account's code and name. Filed receipts stay on that same account."""
+    text = (code or "").strip()
+    label = (name or "").strip()
+    parent_code_for(text)
+    if not label:
+        raise AssignError("Enter a name for the GL account.")
+    if text in other_codes:
+        raise AssignError("That GL code is already in use.")
+    return text, label
+
+
+def gl_removal_changes() -> dict:
+    """A removed GL drops off the chart. Filed receipts and their links stay put."""
+    return {"is_active": False}
 
 
 def links_released_by_removal(

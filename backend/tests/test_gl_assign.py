@@ -1,10 +1,13 @@
 import unittest
 
+from app.services.gl_rollup import ParentLinkError
 from app.services.gl_assign import (
     AssignError,
     choose_reassignment,
     expense_account_gl,
+    gl_removal_changes,
     links_released_by_removal,
+    revised_gl,
     posted_gl_name,
     posting_gl_id,
 )
@@ -104,7 +107,21 @@ class ReassignmentTests(unittest.TestCase):
         )
 
 
+class RevisionTests(unittest.TestCase):
+    def test_a_correction_keeps_the_same_account_and_rejects_a_bad_code(self):
+        self.assertEqual(revised_gl(" 6410 ", " Travel expense ", set()), ("6410", "Travel expense"))
+        with self.assertRaises(AssignError):
+            revised_gl("6410", "  ", set())
+        with self.assertRaises(AssignError):
+            revised_gl("6410", "Travel expense", {"6410"})
+        with self.assertRaises(ParentLinkError):
+            revised_gl("641", "Travel expense", set())
+
+
 class RemovalTests(unittest.TestCase):
+    def test_removing_a_gl_hides_it_and_leaves_filed_receipts_alone(self):
+        self.assertEqual(gl_removal_changes(), {"is_active": False})
+
     def test_removing_a_gl_releases_its_expense_accounts_and_child_accounts(self):
         mappings, children = links_released_by_removal(
             "travel",

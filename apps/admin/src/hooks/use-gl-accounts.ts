@@ -101,6 +101,39 @@ export function useReassignExpenseAccount() {
   })
 }
 
+export function useUpdateGLAccount() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ id, account_code, account_name }: { id: string; account_code: string; account_name: string }) => {
+      const { data } = await api.put(`/gl-accounts/${id}`, { account_code, account_name })
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['gl-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-insights'] })
+    },
+  })
+}
+
+export function useDeleteGLAccount() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/gl-accounts/${id}`)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['gl-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-insights'] })
+    },
+  })
+}
+
 export function useUpdateGLAccountParent() {
   const queryClient = useQueryClient()
 

@@ -5,6 +5,7 @@ from app.services.gl_rollup import (
     ParentLinkError,
     normalize_parent_request,
     parent_code_for,
+    parent_on_open,
     spending_groups,
     validate_parent,
 )
@@ -15,6 +16,11 @@ def account(account_id, code, name, parent_id=None):
 
 
 class ChartCodeTests(unittest.TestCase):
+    def test_opening_the_chart_leaves_a_removed_parent_removed(self):
+        self.assertEqual(parent_on_open(None), "create")
+        self.assertEqual(parent_on_open(True), "keep")
+        self.assertEqual(parent_on_open(False), "leave")
+
     def test_the_first_two_digits_name_the_parent(self):
         self.assertIsNone(parent_code_for("6400"))
         self.assertEqual(parent_code_for("6410"), "6400")

@@ -7,8 +7,8 @@ from app.schemas import (
     GLAccountMappingCreate, GLAccountMappingResponse, GLAccountMappingDetail
 )
 from app.middleware.auth import get_current_admin_user, get_current_user
-from app.services.gl_assign import AssignError, choose_reassignment, expense_account_gl, links_released_by_removal, posted_gl_name
-from app.services.gl_rollup import ParentLinkError, parent_code_for, validate_parent
+from app.services.gl_assign import AssignError, choose_reassignment, expense_account_gl, gl_removal_changes, posted_gl_name, revised_gl
+from app.services.gl_rollup import ParentLinkError, parent_code_for, parent_on_open, validate_parent
 from pydantic import BaseModel
 from typing import List, Optional
 from app.schemas import UUID4
@@ -151,15 +151,18 @@ def align_chart(db: Session) -> None:
                 changed = True
             continue
         parent = known.get(parent_code)
-        if parent is None:
+        action = parent_on_open(None if parent is None else bool(parent.is_active))
+        if action == "create":
             parent = GLAccount(account_code=parent_code, account_name=parent_code, is_active=True)
             db.add(parent)
             db.flush()
             known[parent_code] = parent
             changed = True
-        elif not parent.is_active:
-            parent.is_active = True
-            changed = True
+        elif action == "leave":
+            if account.parent_id != parent.id:
+                account.parent_id = parent.id
+                changed = True
+            continue
         if account.parent_id != parent.id:
             account.parent_id = parent.id
             changed = True
@@ -384,11 +387,32 @@ def update_gl_account(
         raise HTTPException(status_code=404, detail="GL Account not found")
     
     update_data = account_update.model_dump(exclude_unset=True)
+    code_changed = False
+    if "account_code" in update_data or "account_name" in update_data:
+        others = {
+            row.account_code
+            for row in db.query(GLAccount).all()
+            if row.id != account.id
+        }
+        try:
+            code, name = revised_gl(
+                update_data.get("account_code", account.account_code),
+                update_data.get("account_name", account.account_name),
+                others,
+            )
+        except (AssignError, ParentLinkError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        code_changed = code != account.account_code
+        update_data["account_code"] = code
+        update_data["account_name"] = name
     if "parent_id" in update_data:
         check_parent(account.id, update_data["parent_id"], db)
     for field, value in update_data.items():
         setattr(account, field, value)
-    
+    if code_changed:
+        known = {row.account_code: row for row in db.query(GLAccount).all()}
+        place_on_chart(account, known, db)
+
     db.commit()
     db.refresh(account)
     return account
@@ -404,17 +428,8 @@ def delete_gl_account(
     if not account:
         raise HTTPException(status_code=404, detail="GL Account not found")
 
-    grouped: dict[str, list[str]] = {}
-    mapping_rows = {str(mapping.id): mapping for mapping in db.query(GLAccountMapping).all()}
-    for mapping in mapping_rows.values():
-        grouped.setdefault(str(mapping.gl_account_id), []).append(str(mapping.id))
-    drop_ids, child_ids = links_released_by_removal(str(account.id), grouped, parent_map(db))
-    for mapping_id in drop_ids:
-        db.delete(mapping_rows[mapping_id])
-    children = {str(row.id): row for row in db.query(GLAccount).all()}
-    for child_id in child_ids:
-        children[child_id].parent_id = None
-    account.is_active = False
+    for field, value in gl_removal_changes().items():
+        setattr(account, field, value)
     db.commit()
     return None
 

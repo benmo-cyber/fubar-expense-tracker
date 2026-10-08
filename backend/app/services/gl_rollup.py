@@ -8,6 +8,15 @@ class ParentLinkError(ValueError):
     pass
 
 
+def parent_on_open(parent_is_active: bool | None) -> str:
+    """Opening the chart does not bring a removed parent back."""
+    if parent_is_active is None:
+        return "create"
+    if parent_is_active:
+        return "keep"
+    return "leave"
+
+
 def parent_code_for(code: str) -> str | None:
     """A four-digit code rolls up by itself: 6410 belongs under 6400."""
     text = (code or "").strip()
