@@ -8,6 +8,16 @@ class ParentLinkError(ValueError):
     pass
 
 
+def parent_code_for(code: str) -> str | None:
+    """A four-digit code rolls up by itself: 6410 belongs under 6400."""
+    text = (code or "").strip()
+    if len(text) != 4 or not text.isdigit():
+        raise ParentLinkError("Use a four-digit GL code. The first two digits are the parent.")
+    if text.endswith("00"):
+        return None
+    return f"{text[:2]}00"
+
+
 def normalize_parent_request(
     child_code: str,
     parent_code: str | None,

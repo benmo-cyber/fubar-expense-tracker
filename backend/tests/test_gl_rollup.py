@@ -4,6 +4,7 @@ from decimal import Decimal
 from app.services.gl_rollup import (
     ParentLinkError,
     normalize_parent_request,
+    parent_code_for,
     spending_groups,
     validate_parent,
 )
@@ -11,6 +12,22 @@ from app.services.gl_rollup import (
 
 def account(account_id, code, name, parent_id=None):
     return {"id": account_id, "code": code, "name": name, "parent_id": parent_id}
+
+
+class ChartCodeTests(unittest.TestCase):
+    def test_the_first_two_digits_name_the_parent(self):
+        self.assertIsNone(parent_code_for("6400"))
+        self.assertEqual(parent_code_for("6410"), "6400")
+        self.assertEqual(parent_code_for("6415"), "6400")
+        self.assertIsNone(parent_code_for("6200"))
+
+    def test_a_code_has_to_be_four_digits(self):
+        with self.assertRaises(ParentLinkError):
+            parent_code_for("64")
+        with self.assertRaises(ParentLinkError):
+            parent_code_for("641")
+        with self.assertRaises(ParentLinkError):
+            parent_code_for("64A0")
 
 
 class ParentLinkTests(unittest.TestCase):

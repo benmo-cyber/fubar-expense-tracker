@@ -21,7 +21,6 @@ import {
   useExpenseAccounts,
   useCreateExpenseAccount,
   useReassignExpenseAccount,
-  useUpdateGLAccountParent,
 } from '@/hooks/use-gl-accounts'
 import { Loader2, Trash2, Plus } from 'lucide-react'
 
@@ -41,7 +40,6 @@ export default function GLAccountsPage() {
   const { data: expenseAccounts } = useExpenseAccounts()
   const createAccount = useCreateExpenseAccount()
   const reassignAccount = useReassignExpenseAccount()
-  const updateParent = useUpdateGLAccountParent()
   const [newGlFor, setNewGlFor] = useState<string | null>(null)
   const [newCode, setNewCode] = useState('')
   const [newName, setNewName] = useState('')
@@ -50,8 +48,6 @@ export default function GLAccountsPage() {
   const [accountDescription, setAccountDescription] = useState('')
   const [glCode, setGlCode] = useState('')
   const [glName, setGlName] = useState('')
-  const [parentCode, setParentCode] = useState('')
-  const [parentName, setParentName] = useState('')
   const [formError, setFormError] = useState('')
 
   const [newMapping, setNewMapping] = useState<{
@@ -67,23 +63,17 @@ export default function GLAccountsPage() {
         description: accountDescription.trim(),
         gl_code: glCode.trim(),
         gl_name: glName.trim(),
-        parent_code: parentCode.trim() || undefined,
-        parent_name: parentName.trim() || undefined,
       })
       setAccountName('')
       setAccountDescription('')
       setGlCode('')
       setGlName('')
-      setParentCode('')
-      setParentName('')
     } catch (error) {
       const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
       setFormError(typeof detail === 'string' ? detail : 'That expense account was not created. Use a new name and fill in the GL account.')
     }
   }
 
-  const parentKnown = glAccounts?.some((gl) => gl.account_code === parentCode.trim())
-  const parentReady = !parentCode.trim() || Boolean(parentKnown) || Boolean(parentName.trim())
   const isLoading = glLoading || mappingsLoading || categoriesLoading
 
   if (isLoading) {
@@ -113,7 +103,7 @@ export default function GLAccountsPage() {
       <div>
         <h1 className="text-3xl font-bold">Expense accounts</h1>
         <p className="text-muted-foreground">
-          Create the plain-text accounts people see, assign each one to a GL account, and roll sub-accounts up to a parent. If a GL account changes or is removed, pick another one on the row. Receipts already filed stay on the account they were posted to.
+          Create the plain-text accounts people see and assign each one to a GL account. A four-digit code sets the parent on its own: 6410 rolls up to 6400. If a GL account changes, pick another one on the row. Receipts already filed stay on the account they were posted to.
         </p>
       </div>
 
@@ -136,28 +126,20 @@ export default function GLAccountsPage() {
             </div>
             <div>
               <Label>GL code</Label>
-              <Input className="mt-1" value={glCode} onChange={(e) => setGlCode(e.target.value)} placeholder="6100" />
+              <Input className="mt-1" value={glCode} onChange={(e) => setGlCode(e.target.value)} placeholder="6410" />
             </div>
             <div>
               <Label>GL account name</Label>
-              <Input className="mt-1" value={glName} onChange={(e) => setGlName(e.target.value)} placeholder="Vehicle fuel" />
-            </div>
-            <div>
-              <Label>Parent GL code</Label>
-              <Input className="mt-1" value={parentCode} onChange={(e) => setParentCode(e.target.value)} placeholder="6400" />
-            </div>
-            <div>
-              <Label>Parent GL name</Label>
-              <Input className="mt-1" value={parentName} onChange={(e) => setParentName(e.target.value)} placeholder="Travel & Meals" />
+              <Input className="mt-1" value={glName} onChange={(e) => setGlName(e.target.value)} placeholder="Travel expense" />
             </div>
           </div>
           <p className="text-sm text-muted-foreground">
-            Leave the parent blank when this account stands on its own. To put travel or meals under 6400, enter that code and Travel & Meals. The parent is created the first time you use it.
+            Enter one four-digit code. The first two digits are the parent and the last two are the account under it. 6410 rolls up to 6400. A code ending in 00, such as 6400, is the parent.
           </p>
           {formError ? <p className="text-sm text-red-600">{formError}</p> : null}
           <Button
             onClick={handleCreateAccount}
-            disabled={!accountName.trim() || !glCode.trim() || !glName.trim() || !parentReady || createAccount.isPending}
+            disabled={!accountName.trim() || !glCode.trim() || !glName.trim() || createAccount.isPending}
           >
             <Plus className="h-4 w-4 mr-2" />
             Create account
@@ -238,23 +220,11 @@ export default function GLAccountsPage() {
                     ) : null}
                   </TableCell>
                   <TableCell>
-                    {account.gl_account_id ? (
-                      <select
-                        className="rounded-md border border-input bg-background px-3 py-1"
-                        value={account.parent_id || ''}
-                        onChange={(event) => updateParent.mutate({
-                          id: account.gl_account_id as string,
-                          parent_id: event.target.value || null,
-                        })}
-                      >
-                        <option value="">No parent</option>
-                        {glAccounts?.filter((gl) => gl.id !== account.gl_account_id).map((gl) => (
-                          <option key={gl.id} value={gl.id}>
-                            {gl.account_code} - {gl.account_name}
-                          </option>
-                        ))}
-                      </select>
-                    ) : 'Not assigned'}
+                    {account.parent_code
+                      ? (account.parent_name && account.parent_name !== account.parent_code
+                        ? `${account.parent_code} ${account.parent_name}`
+                        : account.parent_code)
+                      : '—'}
                   </TableCell>
                 </TableRow>
               )) : (

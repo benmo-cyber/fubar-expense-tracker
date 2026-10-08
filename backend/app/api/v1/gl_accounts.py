@@ -8,7 +8,7 @@ from app.schemas import (
 )
 from app.middleware.auth import get_current_admin_user, get_current_user
 from app.services.gl_assign import AssignError, choose_reassignment, expense_account_gl, links_released_by_removal
-from app.services.gl_rollup import ParentLinkError, normalize_parent_request, validate_parent
+from app.services.gl_rollup import ParentLinkError, parent_code_for, validate_parent
 from pydantic import BaseModel
 from typing import List, Optional
 from app.schemas import UUID4
@@ -20,6 +20,24 @@ router = APIRouter(prefix="/gl-accounts", tags=["GL Accounts"])
 def parent_map(db: Session) -> dict[str, str | None]:
     rows = db.query(GLAccount.id, GLAccount.parent_id).all()
     return {str(row.id): (str(row.parent_id) if row.parent_id else None) for row in rows}
+
+
+def place_on_chart(gl_account: GLAccount, known: dict, db: Session) -> None:
+    """Set the parent from the code. 6410 lands under 6400, and 6400 stands on its own."""
+    parent_code = parent_code_for(gl_account.account_code)
+    if parent_code is None:
+        gl_account.parent_id = None
+        return
+    parent = known.get(parent_code)
+    if parent is None:
+        parent = GLAccount(account_code=parent_code, account_name=parent_code, is_active=True)
+        db.add(parent)
+        db.flush()
+        known[parent_code] = parent
+    elif not parent.is_active:
+        parent.is_active = True
+    gl_account.parent_id = parent.id
+    check_parent(gl_account.id, gl_account.parent_id, db)
 
 
 def check_parent(account_id, parent_id, db: Session) -> None:
@@ -116,11 +134,45 @@ def _account_view(category: Category) -> ExpenseAccountOut:
     )
 
 
+def align_chart(db: Session) -> None:
+    """Point every four-digit account at the parent its code already names."""
+    known = {row.account_code: row for row in db.query(GLAccount).all()}
+    changed = False
+    for account in list(known.values()):
+        if not account.is_active:
+            continue
+        try:
+            parent_code = parent_code_for(account.account_code)
+        except ParentLinkError:
+            continue
+        if parent_code is None:
+            if account.parent_id is not None:
+                account.parent_id = None
+                changed = True
+            continue
+        parent = known.get(parent_code)
+        if parent is None:
+            parent = GLAccount(account_code=parent_code, account_name=parent_code, is_active=True)
+            db.add(parent)
+            db.flush()
+            known[parent_code] = parent
+            changed = True
+        elif not parent.is_active:
+            parent.is_active = True
+            changed = True
+        if account.parent_id != parent.id:
+            account.parent_id = parent.id
+            changed = True
+    if changed:
+        db.commit()
+
+
 @router.get("/expense-accounts", response_model=List[ExpenseAccountOut])
 def list_expense_accounts(
     current_user = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    align_chart(db)
     categories = db.query(Category).filter(Category.is_active == True).order_by(Category.name).all()
     return [_account_view(category) for category in categories]
 
@@ -143,7 +195,7 @@ def create_expense_account(
 
     known = {row.account_code: row for row in db.query(GLAccount).all()}
     try:
-        requested_parent = normalize_parent_request(gl_code, body.parent_code, body.parent_name, set(known))
+        parent_code_for(gl_code)
     except ParentLinkError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -152,19 +204,12 @@ def create_expense_account(
         gl_account = GLAccount(account_code=gl_code, account_name=gl_name, is_active=True)
         db.add(gl_account)
         db.flush()
-    elif not gl_account.is_active:
+        known[gl_code] = gl_account
+    else:
         gl_account.is_active = True
-        gl_account.account_name = gl_name
-
-    if requested_parent:
-        parent_code, parent_name = requested_parent
-        parent = known.get(parent_code)
-        if parent is None:
-            parent = GLAccount(account_code=parent_code, account_name=parent_name, is_active=True)
-            db.add(parent)
-            db.flush()
-        gl_account.parent_id = parent.id
-        check_parent(gl_account.id, gl_account.parent_id, db)
+        if gl_code.endswith("00") or gl_account.account_name == gl_account.account_code:
+            gl_account.account_name = gl_name
+    place_on_chart(gl_account, known, db)
 
     category = Category(name=name, description=body.description, is_active=True)
     db.add(category)
@@ -208,16 +253,26 @@ def reassign_expense_account(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     by_id = {str(account.id): account for account in accounts}
+    by_code = {account.account_code: account for account in accounts}
     if choice["kind"] == "create":
+        try:
+            parent_code_for(choice["code"])
+        except ParentLinkError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         gl_account = GLAccount(account_code=choice["code"], account_name=choice["name"], is_active=True)
         db.add(gl_account)
         db.flush()
+        by_code[gl_account.account_code] = gl_account
     else:
         gl_account = by_id[choice["id"]]
         if choice["kind"] == "reactivate":
             gl_account.is_active = True
             if choice.get("name"):
                 gl_account.account_name = choice["name"]
+    try:
+        place_on_chart(gl_account, by_code, db)
+    except ParentLinkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     mapping = category.gl_mapping
     if mapping is None:
