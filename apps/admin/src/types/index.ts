@@ -26,6 +26,7 @@ export interface GLAccount {
   account_name: string
   description?: string
   account_type?: string
+  parent_id?: string
   is_active: boolean
   created_at: string
   updated_at: string

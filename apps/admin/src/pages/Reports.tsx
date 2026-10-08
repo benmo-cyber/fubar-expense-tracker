@@ -19,6 +19,8 @@ type Line = {
   category_name: string | null
   gl_name: string | null
   gl_code: string | null
+  parent_code?: string | null
+  parent_name?: string | null
   receipt_url: string | null
   notes: string | null
 }
@@ -33,6 +35,7 @@ type Report = {
   review_notes: string | null
   trips: Trip[]
   by_gl: Split[]
+  gl_groups?: { id?: string; code: string; name: string; amount: number; children: { code: string; name: string; amount: number; percent: number }[] }[]
   by_merchant: Split[]
   expenses: Line[]
 }
@@ -201,16 +204,32 @@ export function ReportDetail() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="border-0 shadow-sm">
           <CardHeader><CardTitle className="text-[#0B3D73]">By GL account</CardTitle></CardHeader>
-          <CardContent className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={report.by_gl}>
-                <CartesianGrid vertical={false} stroke="#E6EEF8" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#5B6B7C' }} interval={0} angle={-20} height={50} />
-                <YAxis hide />
-                <Tooltip content={<moneyTip />} />
-                <Bar dataKey="amount" fill="#0B4F8A" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <CardContent>
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={report.by_gl}>
+                  <CartesianGrid vertical={false} stroke="#E6EEF8" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#5B6B7C' }} interval={0} angle={-20} height={50} />
+                  <YAxis hide />
+                  <Tooltip content={<moneyTip />} />
+                  <Bar dataKey="amount" fill="#0B4F8A" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            {(report.gl_groups || []).filter((group) => group.children.length > 0).map((group) => (
+              <div key={group.id || group.code} className="mt-4">
+                <div className="flex items-center justify-between text-sm font-medium text-[#0B3D73]">
+                  <span>{group.code} {group.name}</span>
+                  <span>{formatCurrency(group.amount)}</span>
+                </div>
+                {group.children.map((child) => (
+                  <div key={`${group.code}-${child.code}`} className="mt-1 flex items-center justify-between pl-4 text-sm text-[#334155]">
+                    <span>{child.code} {child.name}</span>
+                    <span>{formatCurrency(child.amount)} · {child.percent.toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            ))}
           </CardContent>
         </Card>
         <Card className="border-0 shadow-sm">
@@ -249,7 +268,10 @@ export function ReportDetail() {
                   <td className="px-4 py-3">{formatDate(line.expense_date)}</td>
                   <td className="px-4 py-3">{line.merchant_name}</td>
                   <td className="px-4 py-3">{line.category_name}</td>
-                  <td className="px-4 py-3">{line.gl_code} {line.gl_name}</td>
+                  <td className="px-4 py-3">
+                    {line.gl_code} {line.gl_name}
+                    {line.parent_code ? <div className="text-xs text-[#5B6B7C]">Under {line.parent_code} {line.parent_name}</div> : null}
+                  </td>
                   <td className="px-4 py-3">{line.trip_name || '—'}</td>
                   <td className="px-4 py-3 text-right font-semibold">{formatCurrency(line.amount)}</td>
                 </tr>

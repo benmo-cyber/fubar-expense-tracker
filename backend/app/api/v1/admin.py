@@ -4,7 +4,8 @@ from sqlalchemy import and_, func
 from app.core.database import get_db
 from collections import defaultdict
 from decimal import Decimal
-from app.models import Expense, ExpenseStatus, ExpenseReport, ReportCategoryBreakdown, Category, ReportStatus
+from app.models import Expense, ExpenseStatus, ExpenseReport, ReportCategoryBreakdown, Category, ReportStatus, GLAccount
+from app.services.gl_rollup import UNASSIGNED, rollup
 from app.schemas import (
     ExpenseExportRequest, ExpenseDetailResponse, DashboardStats
 )
@@ -85,12 +86,19 @@ def get_finance_insights(
         monthly[label] += amount
         if expense.expense_date.year == today.year and expense.expense_date.month == today.month:
             this_month += amount
-        gl_name = expense.gl_account.account_name if expense.gl_account else "Unassigned"
         person = expense.user.full_name if expense.user else "Unknown"
         merchant = expense.merchant.name if expense.merchant else (expense.merchant_name or "Unknown")
-        by_gl[gl_name] += amount
         by_person[person] += amount
         by_merchant[merchant] += amount
+    gl_groups = rollup(
+        [
+            (str(expense.gl_account_id) if expense.gl_account_id else UNASSIGNED, expense.amount or Decimal("0"))
+            for expense in expenses
+        ],
+        db.query(GLAccount).all(),
+    )
+    for group in gl_groups:
+        by_gl[group["name"]] += Decimal(str(group["amount"]))
     month_keys = sorted(
         {expense.expense_date.replace(day=1) for expense in expenses},
     )[-6:]
@@ -108,6 +116,7 @@ def get_finance_insights(
         "awaiting_review": sum(1 for report in reports if report.status == ReportStatus.SUBMITTED),
         "monthly": [{"month": day.strftime("%b %Y"), "amount": _money(monthly[day.strftime("%b %Y")])} for day in month_keys],
         "by_gl": _top(by_gl),
+        "gl_groups": gl_groups,
         "by_person": _top(by_person),
         "by_merchant": _top(by_merchant),
         "reports": report_rows,

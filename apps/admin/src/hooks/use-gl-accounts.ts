@@ -29,6 +29,9 @@ export type ExpenseAccount = {
   gl_account_id?: string
   gl_code?: string
   gl_name?: string
+  parent_id?: string
+  parent_code?: string
+  parent_name?: string
 }
 
 export function useExpenseAccounts() {
@@ -50,6 +53,8 @@ export function useCreateExpenseAccount() {
       description?: string
       gl_code: string
       gl_name: string
+      parent_code?: string
+      parent_name?: string
     }) => {
       const { data } = await api.post<ExpenseAccount>('/gl-accounts/expense-accounts', account)
       return data
@@ -59,6 +64,22 @@ export function useCreateExpenseAccount() {
       queryClient.invalidateQueries({ queryKey: ['categories'] })
       queryClient.invalidateQueries({ queryKey: ['gl-accounts'] })
       queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+    },
+  })
+}
+
+export function useUpdateGLAccountParent() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ id, parent_id }: { id: string; parent_id: string | null }) => {
+      const { data } = await api.put(`/gl-accounts/${id}`, { parent_id })
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['gl-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['finance-insights'] })
     },
   })
 }

@@ -15,8 +15,9 @@ from app.core.security import get_password_hash
 from app.services.passwords import generate_temp_password, must_change_after_issue
 from app.middleware.auth import get_current_admin_user, get_current_user
 from app.models import (
-    Expense, ExpenseReport, Merchant, Notice, ReportStatus, Trip, User, UserRole,
+    Expense, ExpenseReport, GLAccount, Merchant, Notice, ReportStatus, Trip, User, UserRole,
 )
+from app.services.gl_rollup import UNASSIGNED, rollup
 from app.services.reports import refresh_report
 from app.services.storage import storage_service
 
@@ -97,6 +98,13 @@ def report_dict(report: ExpenseReport, db: Session) -> dict:
         })
     status = report.status.value if hasattr(report.status, "value") else str(report.status)
     total = sum((expense.amount or 0) for expense in expenses)
+    gl_groups = rollup(
+        [
+            (str(expense.gl_account_id) if expense.gl_account_id else UNASSIGNED, expense.amount or Decimal("0"))
+            for expense in expenses
+        ],
+        db.query(GLAccount).all(),
+    )
     report.total_amount = total or Decimal("0")
     report.expense_count = len(expenses)
     return {
@@ -112,6 +120,7 @@ def report_dict(report: ExpenseReport, db: Session) -> dict:
         "review_notes": report.review_notes,
         "screenshot_url": report.screenshot_url,
         "by_gl": [{"name": name, "amount": float(amount)} for name, amount in by_gl.items()],
+        "gl_groups": gl_groups,
         "by_merchant": [{"name": name, "amount": float(amount)} for name, amount in by_merchant.items()],
         "trips": trips,
         "expenses": [
@@ -126,6 +135,8 @@ def report_dict(report: ExpenseReport, db: Session) -> dict:
                 "description": expense.description,
                 "gl_name": expense.gl_account.account_name if expense.gl_account else None,
                 "gl_code": expense.gl_account.account_code if expense.gl_account else None,
+                "parent_code": expense.gl_account.parent.account_code if expense.gl_account and expense.gl_account.parent else None,
+                "parent_name": expense.gl_account.parent.account_name if expense.gl_account and expense.gl_account.parent else None,
                 "receipt_url": expense.receipt_url,
                 "notes": expense.notes,
             }

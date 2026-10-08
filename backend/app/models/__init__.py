@@ -76,10 +76,12 @@ class GLAccount(Base):
     account_name = Column(String(255), nullable=False)
     description = Column(Text)
     account_type = Column(String(50))
+    parent_id = Column(Uuid(as_uuid=True), ForeignKey("gl_accounts.id"))
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    
+
+    parent = relationship("GLAccount", remote_side=[id], foreign_keys=[parent_id])
     mappings = relationship("GLAccountMapping", back_populates="gl_account")
     expenses = relationship("Expense", back_populates="gl_account")
 

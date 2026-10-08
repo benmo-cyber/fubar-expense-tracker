@@ -7,12 +7,29 @@ from app.schemas import (
     GLAccountMappingCreate, GLAccountMappingResponse, GLAccountMappingDetail
 )
 from app.middleware.auth import get_current_admin_user, get_current_user
+from app.services.gl_rollup import ParentLinkError, normalize_parent_request, validate_parent
 from pydantic import BaseModel
 from typing import List, Optional
 from app.schemas import UUID4
 import uuid
 
 router = APIRouter(prefix="/gl-accounts", tags=["GL Accounts"])
+
+
+def parent_map(db: Session) -> dict[str, str | None]:
+    rows = db.query(GLAccount.id, GLAccount.parent_id).all()
+    return {str(row.id): (str(row.parent_id) if row.parent_id else None) for row in rows}
+
+
+def check_parent(account_id, parent_id, db: Session) -> None:
+    try:
+        validate_parent(
+            str(account_id),
+            str(parent_id) if parent_id else None,
+            parent_map(db),
+        )
+    except ParentLinkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("", response_model=List[GLAccountResponse])
@@ -37,9 +54,11 @@ def create_gl_account(
     existing = db.query(GLAccount).filter(GLAccount.account_code == account.account_code).first()
     if existing:
         raise HTTPException(status_code=400, detail="GL Account with this code already exists")
-    
+
     db_account = GLAccount(**account.model_dump())
     db.add(db_account)
+    db.flush()
+    check_parent(db_account.id, db_account.parent_id, db)
     db.commit()
     db.refresh(db_account)
     return db_account
@@ -50,6 +69,8 @@ class ExpenseAccountCreate(BaseModel):
     description: Optional[str] = None
     gl_code: str
     gl_name: str
+    parent_code: Optional[str] = None
+    parent_name: Optional[str] = None
 
 
 class ExpenseAccountOut(BaseModel):
@@ -59,6 +80,9 @@ class ExpenseAccountOut(BaseModel):
     gl_account_id: Optional[UUID4] = None
     gl_code: Optional[str] = None
     gl_name: Optional[str] = None
+    parent_id: Optional[UUID4] = None
+    parent_code: Optional[str] = None
+    parent_name: Optional[str] = None
 
 
 @router.get("/expense-accounts", response_model=List[ExpenseAccountOut])
@@ -71,6 +95,7 @@ def list_expense_accounts(
     for category in categories:
         mapping = category.gl_mapping
         account = mapping.gl_account if mapping else None
+        parent = account.parent if account else None
         results.append(ExpenseAccountOut(
             category_id=category.id,
             name=category.name,
@@ -78,6 +103,9 @@ def list_expense_accounts(
             gl_account_id=account.id if account else None,
             gl_code=account.account_code if account else None,
             gl_name=account.account_name if account else None,
+            parent_id=parent.id if parent else None,
+            parent_code=parent.account_code if parent else None,
+            parent_name=parent.account_name if parent else None,
         ))
     return results
 
@@ -98,7 +126,13 @@ def create_expense_account(
     if existing:
         raise HTTPException(status_code=400, detail="An expense account with this name already exists")
 
-    gl_account = db.query(GLAccount).filter(GLAccount.account_code == gl_code).first()
+    known = {row.account_code: row for row in db.query(GLAccount).all()}
+    try:
+        requested_parent = normalize_parent_request(gl_code, body.parent_code, body.parent_name, set(known))
+    except ParentLinkError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    gl_account = known.get(gl_code)
     if gl_account is None:
         gl_account = GLAccount(account_code=gl_code, account_name=gl_name, is_active=True)
         db.add(gl_account)
@@ -106,6 +140,16 @@ def create_expense_account(
     elif not gl_account.is_active:
         gl_account.is_active = True
         gl_account.account_name = gl_name
+
+    if requested_parent:
+        parent_code, parent_name = requested_parent
+        parent = known.get(parent_code)
+        if parent is None:
+            parent = GLAccount(account_code=parent_code, account_name=parent_name, is_active=True)
+            db.add(parent)
+            db.flush()
+        gl_account.parent_id = parent.id
+        check_parent(gl_account.id, gl_account.parent_id, db)
 
     category = Category(name=name, description=body.description, is_active=True)
     db.add(category)
@@ -115,6 +159,7 @@ def create_expense_account(
     db.commit()
     db.refresh(category)
     db.refresh(gl_account)
+    parent = gl_account.parent
     return ExpenseAccountOut(
         category_id=category.id,
         name=category.name,
@@ -122,6 +167,9 @@ def create_expense_account(
         gl_account_id=gl_account.id,
         gl_code=gl_account.account_code,
         gl_name=gl_account.account_name,
+        parent_id=parent.id if parent else None,
+        parent_code=parent.account_code if parent else None,
+        parent_name=parent.account_name if parent else None,
     )
 
 
@@ -221,6 +269,8 @@ def update_gl_account(
         raise HTTPException(status_code=404, detail="GL Account not found")
     
     update_data = account_update.model_dump(exclude_unset=True)
+    if "parent_id" in update_data:
+        check_parent(account.id, update_data["parent_id"], db)
     for field, value in update_data.items():
         setattr(account, field, value)
     

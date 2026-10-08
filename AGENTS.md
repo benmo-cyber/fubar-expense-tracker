@@ -1,0 +1,49 @@
+# FUBAR — Agent instructions
+
+These instructions apply to all Agent work in this repository. They follow the same governing rules as SLURP: inspect before claiming, test what you change, and do not invent infrastructure.
+
+## Match the app that is already here
+
+- Backend is FastAPI in `backend/`. Admin is Vite/React in `apps/admin/`. Phone is Expo in `apps/mobile/`.
+- Use the existing models, routers, and services. Do not add a second framework, ORM, or auth system.
+- Schema changes on the existing SQLite database go through `backend/app/core/schema_upgrade.py` when `create_all` will not alter an existing table. Do not invent migration names.
+
+## Unit tests
+
+- For each new or materially changed Python function, add a deterministic unit test. No production data, live OpenAI calls, or dependence on the clock unless that dependency is mocked.
+- Put tests under `backend/tests/`, named `test_<module>.py`.
+- Run the relevant tests before considering the work done, for example:
+
+  ```powershell
+  cd backend
+  .\venv\Scripts\python.exe -m pytest tests/test_<module>.py
+  ```
+
+## Definition of done
+
+- Keep working until the added or updated tests pass, and existing tests in the areas you touched still pass.
+- If a test fails, fix the implementation or the test. Do not delete or skip a test to make the run green.
+- Do not say tests passed, a service restarted, or a deploy finished unless that command was actually run.
+
+## No hallucinations
+
+- Do not invent APIs, model fields, env vars, systemd units, nginx files, ports, or server paths. Read the repo or the server first.
+- If something is unknown, inspect it or ask. Do not guess.
+- Cite real paths from this repo.
+
+## Git and the AWS server
+
+- GitHub is the source of truth: `https://github.com/benmo-cyber/fubar-expense-tracker.git` on `main`.
+- Do not commit `backend/.env`, the SQLite database, or `uploads/`.
+- The production server is the same machine as SLURP. From this PC:
+
+  ```powershell
+  ssh fubar
+  ssh slurp
+  ```
+
+  Both names use `~/.ssh/slurp-key.pem` and the Tailscale address `100.64.161.87`. The public address `3.17.17.219` did not accept SSH when this was set up.
+- SLURP on that server is `/srv/slurp/app`, branch `SLURP-2.0`, remote `git@github.com:benmo-cyber/SLURP-ERP.git`, service `slurp.service`, nginx site `slurp` on `127.0.0.1:8080`, published with Tailscale Serve at `https://slurp.tailb34918.ts.net`.
+- The server already has `~/.ssh/github_deploy` and can read this FUBAR repo. FUBAR is installed at `/srv/fubar/app`, service `fubar.service`, public site `https://fubar.wildwoodingredients.com`.
+- When the user says deploy: commit the work that belongs in the release, `git push` to `main`, then on the server `git pull` and `sudo systemctl restart fubar.service`. FUBAR is low consequence, so deploy without the caution used for SLURP. Do not commit `backend/.env`, the SQLite database, `uploads/`, or the local-only admin proxy in `apps/admin/vite.config.ts`. Admin UI changes are built on this PC with `npx vite build` and copied to `/srv/fubar/admin-dist`, because Node is not installed on the server. After copying, directories must be mode 755 and files mode 644.
+- Do not print private keys or the OpenAI key.

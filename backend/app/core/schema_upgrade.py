@@ -14,6 +14,9 @@ COLUMN_PATCHES = {
         "report_id": "CHAR(32)",
         "trip_id": "CHAR(32)",
     },
+    "gl_accounts": {
+        "parent_id": "CHAR(32)",
+    },
     "expense_reports": {
         "title": "VARCHAR(255)",
         "review_notes": "TEXT",

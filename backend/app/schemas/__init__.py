@@ -102,7 +102,7 @@ class GLAccountBase(BaseModel):
 
 
 class GLAccountCreate(GLAccountBase):
-    pass
+    parent_id: Optional[UUID4] = None
 
 
 class GLAccountUpdate(BaseModel):
@@ -111,10 +111,12 @@ class GLAccountUpdate(BaseModel):
     description: Optional[str] = None
     account_type: Optional[str] = None
     is_active: Optional[bool] = None
+    parent_id: Optional[UUID4] = None
 
 
 class GLAccountResponse(GLAccountBase):
     id: UUID4
+    parent_id: Optional[UUID4] = None
     created_at: datetime
     updated_at: datetime
     

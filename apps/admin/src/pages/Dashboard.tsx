@@ -11,12 +11,15 @@ import { Loader2 } from 'lucide-react'
 const BLUES = ['#0B4F8A', '#1D6FE8', '#4C93F0', '#8BB8F6', '#C5DBFB', '#E7F0FC']
 
 type Slice = { name: string; amount: number }
+type GlChild = { code: string; name: string; amount: number; percent: number }
+type GlGroup = { id?: string; code: string; name: string; amount: number; children: GlChild[] }
 type Insights = {
   spend: number
   this_month: number
   awaiting_review: number
   monthly: { month: string; amount: number }[]
   by_gl: Slice[]
+  gl_groups?: GlGroup[]
   by_person: Slice[]
   by_merchant: Slice[]
   reports: { status: string; count: number; amount: number }[]
@@ -49,6 +52,11 @@ export default function Dashboard() {
 
   if (!stats || !insights.data) return null
   const finance = insights.data
+  const groups = finance.gl_groups || []
+  const accountChart = groups.length
+    ? [...groups].sort((left, right) => right.amount - left.amount).slice(0, 6).map((group) => ({ name: group.name, amount: group.amount }))
+    : finance.by_gl
+  const breakdowns = groups.filter((group) => group.children.length > 0)
 
   return (
     <div className="space-y-6">
@@ -147,15 +155,37 @@ export default function Dashboard() {
           <CardHeader>
             <CardTitle className="text-[#0B3D73]">By GL account</CardTitle>
           </CardHeader>
-          <CardContent className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={finance.by_gl} layout="vertical" margin={{ left: 24 }}>
-                <XAxis type="number" hide />
-                <YAxis type="category" dataKey="name" width={120} tick={{ fill: '#334155', fontSize: 12 }} axisLine={false} tickLine={false} />
-                <Tooltip content={<moneyTip />} />
-                <Bar dataKey="amount" fill="#0B4F8A" radius={[0, 8, 8, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <CardContent>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={accountChart} layout="vertical" margin={{ left: 24 }}>
+                  <XAxis type="number" hide />
+                  <YAxis type="category" dataKey="name" width={120} tick={{ fill: '#334155', fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<moneyTip />} />
+                  <Bar dataKey="amount" fill="#0B4F8A" radius={[0, 8, 8, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            {breakdowns.length ? (
+              <div className="mt-4 space-y-4">
+                {breakdowns.map((group) => (
+                  <div key={group.id || group.code}>
+                    <div className="flex items-center justify-between text-sm font-medium text-[#0B3D73]">
+                      <span>{group.code} {group.name}</span>
+                      <span>{formatCurrency(group.amount)}</span>
+                    </div>
+                    <div className="mt-1 space-y-1">
+                      {group.children.map((child) => (
+                        <div key={`${group.code}-${child.code}-${child.name}`} className="flex items-center justify-between pl-4 text-sm text-[#334155]">
+                          <span>{child.code} {child.name}</span>
+                          <span>{formatCurrency(child.amount)} · {child.percent.toFixed(1)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
         <Card className="border-0 shadow-sm">
