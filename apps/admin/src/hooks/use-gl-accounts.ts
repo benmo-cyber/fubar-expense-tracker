@@ -150,6 +150,36 @@ export function useUpdateGLAccountParent() {
   })
 }
 
+export function useUpdateCategory() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ id, name, description }: { id: string; name: string; description: string }) => {
+      const { data } = await api.put(`/categories/${id}`, { name, description })
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories'] })
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
+    },
+  })
+}
+
+export function useDeleteCategory() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/categories/${id}`)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['categories'] })
+      queryClient.invalidateQueries({ queryKey: ['expense-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['gl-account-mappings'] })
+    },
+  })
+}
+
 export function useCategories() {
   return useQuery({
     queryKey: ['categories'],
