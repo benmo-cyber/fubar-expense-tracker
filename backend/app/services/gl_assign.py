@@ -5,6 +5,17 @@ class AssignError(ValueError):
     pass
 
 
+def posted_gl_name(account_name: str, gl_name: str | None) -> str:
+    """The expense account name is the GL name. A separate GL name is optional."""
+    chosen = (gl_name or "").strip()
+    if chosen:
+        return chosen
+    name = (account_name or "").strip()
+    if not name:
+        raise AssignError("Enter an account name.")
+    return name
+
+
 def posting_gl_id(gl_account_id: str | None, is_active: bool) -> str | None:
     """A receipt posts only to a GL account that is still in use."""
     if gl_account_id and is_active:

@@ -5,6 +5,7 @@ from app.services.gl_assign import (
     choose_reassignment,
     expense_account_gl,
     links_released_by_removal,
+    posted_gl_name,
     posting_gl_id,
 )
 
@@ -13,6 +14,15 @@ ACCOUNTS = [
     {"id": "fuel", "code": "6100", "name": "Vehicle fuel", "is_active": True},
     {"id": "old", "code": "6199", "name": "Old fuel", "is_active": False},
 ]
+
+
+class PostedNameTests(unittest.TestCase):
+    def test_the_account_name_is_the_gl_name(self):
+        self.assertEqual(posted_gl_name("Travel expense", None), "Travel expense")
+        self.assertEqual(posted_gl_name("Travel expense", "  "), "Travel expense")
+        self.assertEqual(posted_gl_name("Travel expense", "Airfare"), "Airfare")
+        with self.assertRaises(AssignError):
+            posted_gl_name("  ", None)
 
 
 class PostingTests(unittest.TestCase):

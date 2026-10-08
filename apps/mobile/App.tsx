@@ -245,7 +245,6 @@ export default function App() {
   const [mergeSource, setMergeSource] = useState("")
   const [accountName, setAccountName] = useState("")
   const [glCode, setGlCode] = useState("")
-  const [glName, setGlName] = useState("")
   const [showInvite, setShowInvite] = useState(false)
   const [chartPerson, setChartPerson] = useState("")
   const [merchantQuery, setMerchantQuery] = useState("")
@@ -703,19 +702,18 @@ export default function App() {
   }
 
   async function createAccount() {
-    if (!accountName.trim() || !glCode.trim() || !glName.trim()) {
-      Alert.alert("Account", "Enter the expense name, GL code, and GL name.")
+    if (!accountName.trim() || !glCode.trim()) {
+      Alert.alert("Account", "Enter the expense name and GL code.")
       return
     }
     setBusy(true)
     try {
       await api("/gl-accounts/expense-accounts", {
         method: "POST",
-        body: JSON.stringify({ name: accountName.trim(), gl_code: glCode.trim(), gl_name: glName.trim() }),
+        body: JSON.stringify({ name: accountName.trim(), gl_code: glCode.trim() }),
       })
       setAccountName("")
       setGlCode("")
-      setGlName("")
       await loadData(true)
     } catch (error) {
       Alert.alert("Account", error instanceof Error ? error.message : "That account was not created.")
@@ -1195,8 +1193,6 @@ export default function App() {
           <TextInput value={accountName} onChangeText={setAccountName} style={styles.input} />
           <Text style={styles.label}>GL code</Text>
           <TextInput value={glCode} onChangeText={setGlCode} style={styles.input} />
-          <Text style={styles.label}>GL name</Text>
-          <TextInput value={glName} onChangeText={setGlName} style={styles.input} />
           <Pressable style={styles.primary} onPress={() => void createAccount()}>
             <Text style={styles.primaryText}>Add account</Text>
           </Pressable>

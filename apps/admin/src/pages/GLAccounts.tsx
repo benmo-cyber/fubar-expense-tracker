@@ -42,12 +42,10 @@ export default function GLAccountsPage() {
   const reassignAccount = useReassignExpenseAccount()
   const [newGlFor, setNewGlFor] = useState<string | null>(null)
   const [newCode, setNewCode] = useState('')
-  const [newName, setNewName] = useState('')
   const [assignError, setAssignError] = useState('')
   const [accountName, setAccountName] = useState('')
   const [accountDescription, setAccountDescription] = useState('')
   const [glCode, setGlCode] = useState('')
-  const [glName, setGlName] = useState('')
   const [formError, setFormError] = useState('')
 
   const [newMapping, setNewMapping] = useState<{
@@ -62,12 +60,10 @@ export default function GLAccountsPage() {
         name: accountName.trim(),
         description: accountDescription.trim(),
         gl_code: glCode.trim(),
-        gl_name: glName.trim(),
       })
       setAccountName('')
       setAccountDescription('')
       setGlCode('')
-      setGlName('')
     } catch (error) {
       const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
       setFormError(typeof detail === 'string' ? detail : 'That expense account was not created. Use a new name and fill in the GL account.')
@@ -128,10 +124,6 @@ export default function GLAccountsPage() {
               <Label>GL code</Label>
               <Input className="mt-1" value={glCode} onChange={(e) => setGlCode(e.target.value)} placeholder="6410" />
             </div>
-            <div>
-              <Label>GL account name</Label>
-              <Input className="mt-1" value={glName} onChange={(e) => setGlName(e.target.value)} placeholder="Travel expense" />
-            </div>
           </div>
           <p className="text-sm text-muted-foreground">
             Enter one four-digit code. The first two digits are the parent and the last two are the account under it. 6410 rolls up to 6400. A code ending in 00, such as 6400, is the parent.
@@ -139,7 +131,7 @@ export default function GLAccountsPage() {
           {formError ? <p className="text-sm text-red-600">{formError}</p> : null}
           <Button
             onClick={handleCreateAccount}
-            disabled={!accountName.trim() || !glCode.trim() || !glName.trim() || createAccount.isPending}
+            disabled={!accountName.trim() || !glCode.trim() || createAccount.isPending}
           >
             <Plus className="h-4 w-4 mr-2" />
             Create account
@@ -169,7 +161,6 @@ export default function GLAccountsPage() {
                         if (value === '__new__') {
                           setNewGlFor(account.category_id)
                           setNewCode('')
-                          setNewName('')
                           return
                         }
                         setNewGlFor(null)
@@ -199,14 +190,13 @@ export default function GLAccountsPage() {
                     {newGlFor === account.category_id ? (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Input className="w-24" value={newCode} onChange={(event) => setNewCode(event.target.value)} placeholder="6410" />
-                        <Input className="w-48" value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Travel expense" />
                         <Button
                           size="sm"
-                          disabled={!newCode.trim() || !newName.trim() || reassignAccount.isPending}
+                          disabled={!newCode.trim() || reassignAccount.isPending}
                           onClick={() => {
                             setAssignError('')
                             reassignAccount.mutate(
-                              { categoryId: account.category_id, gl_code: newCode.trim(), gl_name: newName.trim() },
+                              { categoryId: account.category_id, gl_code: newCode.trim() },
                               {
                                 onSuccess: () => setNewGlFor(null),
                                 onError: (error) => setAssignError(detailFrom(error)),

@@ -7,7 +7,7 @@ from app.schemas import (
     GLAccountMappingCreate, GLAccountMappingResponse, GLAccountMappingDetail
 )
 from app.middleware.auth import get_current_admin_user, get_current_user
-from app.services.gl_assign import AssignError, choose_reassignment, expense_account_gl, links_released_by_removal
+from app.services.gl_assign import AssignError, choose_reassignment, expense_account_gl, links_released_by_removal, posted_gl_name
 from app.services.gl_rollup import ParentLinkError, parent_code_for, validate_parent
 from pydantic import BaseModel
 from typing import List, Optional
@@ -87,7 +87,7 @@ class ExpenseAccountCreate(BaseModel):
     name: str
     description: Optional[str] = None
     gl_code: str
-    gl_name: str
+    gl_name: Optional[str] = None
     parent_code: Optional[str] = None
     parent_name: Optional[str] = None
 
@@ -185,9 +185,12 @@ def create_expense_account(
 ):
     name = body.name.strip()
     gl_code = body.gl_code.strip()
-    gl_name = body.gl_name.strip()
-    if not name or not gl_code or not gl_name:
-        raise HTTPException(status_code=400, detail="Name, GL code, and GL name are required")
+    if not name or not gl_code:
+        raise HTTPException(status_code=400, detail="Name and a four-digit GL code are required")
+    try:
+        gl_name = posted_gl_name(name, body.gl_name)
+    except AssignError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     existing = db.query(Category).filter(Category.name == name).first()
     if existing:
@@ -246,7 +249,7 @@ def reassign_expense_account(
         choice = choose_reassignment(
             str(body.gl_account_id) if body.gl_account_id else None,
             body.gl_code,
-            body.gl_name,
+            posted_gl_name(category.name, body.gl_name),
             known,
         )
     except AssignError as exc:

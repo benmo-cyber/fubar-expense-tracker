@@ -54,7 +54,7 @@ export function useCreateExpenseAccount() {
       name: string
       description?: string
       gl_code: string
-      gl_name: string
+      gl_name?: string
       parent_code?: string
       parent_name?: string
     }) => {
