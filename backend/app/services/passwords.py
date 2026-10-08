@@ -16,8 +16,8 @@ def generate_temp_password(length: int = 10) -> str:
 
 
 def must_change_after_issue(actor_id: str, target_id: str) -> bool:
-    """Someone else must choose a new password. Issuing your own does not."""
-    return str(actor_id) != str(target_id)
+    """A temporary password always has to be replaced, including one you issue for yourself."""
+    return True
 
 
 def validate_new_password(new_password: str, confirm: str, current: str | None = None) -> str | None:

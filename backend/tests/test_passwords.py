@@ -22,9 +22,9 @@ class PasswordRuleTests(unittest.TestCase):
         self.assertNotIn("0", password)
         self.assertNotIn("O", password)
 
-    def test_issuing_for_someone_else_requires_a_change(self):
+    def test_a_temporary_password_always_requires_a_change(self):
         self.assertTrue(must_change_after_issue("admin", "sales"))
-        self.assertFalse(must_change_after_issue("admin", "admin"))
+        self.assertTrue(must_change_after_issue("admin", "admin"))
 
     def test_new_password_rules(self):
         self.assertEqual(validate_new_password("short", "short"), "Password must be at least 8 characters.")
