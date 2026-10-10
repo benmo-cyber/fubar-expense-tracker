@@ -19,6 +19,7 @@ from app.models import (
     Expense, ExpenseReport, GLAccount, Merchant, Notice, ReportStatus, Trip, User, UserRole,
 )
 from app.services.gl_rollup import UNASSIGNED, rollup
+from app.services.receipt_pack import bundle_name, grouped_receipts, pack_report, receipt_folder_name
 from app.services.reports import can_view_report, refresh_report, team_member_ids
 from app.services.storage import storage_service
 
@@ -471,6 +472,16 @@ def _csv_body(payload: dict) -> str:
     return buffer.getvalue()
 
 
+def _receipt_file(url: str) -> bytes | None:
+    getter = getattr(storage_service, "get_file_path", None)
+    if getter is None:
+        return None
+    path = getter(url)
+    if not path.is_file():
+        return None
+    return path.read_bytes()
+
+
 def _download_name(payload: dict, extension: str) -> str:
     raw = f"FUBAR-{(payload['user_name'] or 'report')}-{payload['title']}"
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-")
@@ -504,6 +515,40 @@ def export_report(
         output.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{_download_name(payload, "xlsx")}"'},
+    )
+
+
+@router.get("/reports/{report_id}/receipts")
+def export_receipt_pack(
+    report_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    report = db.query(ExpenseReport).filter(ExpenseReport.id == report_id).first()
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if not viewer_can_open(current_user, report, db):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    payload = report_dict(report, db)
+    db.commit()
+    workbook = _fill_workbook(payload)
+    output = io.BytesIO()
+    workbook.save(output)
+    folders = []
+    for folder, named in grouped_receipts(payload["user_name"], payload["title"], _sorted_expenses(payload)):
+        files = []
+        for filename, expense in named:
+            content = _receipt_file(expense["receipt_url"])
+            if content is not None:
+                files.append((filename, content))
+        if files:
+            folders.append((folder, files))
+    sheet_name = f"{bundle_name(payload['user_name'], payload['title'])}.xlsx"
+    zip_name = f"{receipt_folder_name(payload['user_name'], payload['title'])}.zip"
+    return Response(
+        pack_report(sheet_name, output.getvalue(), folders),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zip_name}"'},
     )
 
 

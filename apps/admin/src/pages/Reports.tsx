@@ -166,6 +166,17 @@ export function ReportDetail() {
     URL.revokeObjectURL(url)
   }
 
+  async function downloadReceipts() {
+    const response = await api.get(`/reports/${reportId}/receipts`, { responseType: 'blob' })
+    const folder = `${report?.user_name || 'Report'} ${report?.title || 'Expenses'} receipts`
+    const url = URL.createObjectURL(response.data)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${folder}.zip`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   async function act(path: string, body?: object) {
     setError('')
     try {
@@ -196,6 +207,7 @@ export function ReportDetail() {
         <div className="flex gap-2">
           <Button className="bg-[#1D6FE8] hover:bg-[#0B4F8A]" onClick={() => void download('xlsx')}>Excel</Button>
           <Button variant="outline" onClick={() => void download('csv')}>CSV</Button>
+          <Button variant="outline" onClick={() => void downloadReceipts()}>Receipts</Button>
         </div>
       </div>
       {report.review_notes ? <p className="rounded-xl bg-white p-4 text-sm shadow-sm">Notes: {report.review_notes}</p> : null}
