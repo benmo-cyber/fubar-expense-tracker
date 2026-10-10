@@ -1,6 +1,7 @@
 import unittest
+from decimal import Decimal
 
-from app.services.reports import can_view_report, team_member_ids
+from app.services.reports import can_view_report, report_total, team_member_ids
 
 
 PEOPLE = [
@@ -9,6 +10,12 @@ PEOPLE = [
     {"id": "rep", "supervisor_id": "lead"},
     {"id": "other", "supervisor_id": "ben"},
 ]
+
+
+class ReportTotalTests(unittest.TestCase):
+    def test_a_second_receipt_can_be_a_plain_number_beside_a_decimal(self):
+        self.assertEqual(report_total([Decimal("20.00"), 5.0]), Decimal("25.00"))
+        self.assertEqual(report_total([None]), Decimal("0.00"))
 
 
 class TeamReportTests(unittest.TestCase):

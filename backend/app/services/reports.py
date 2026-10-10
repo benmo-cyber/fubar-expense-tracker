@@ -38,10 +38,20 @@ def can_view_report(viewer_id: str, is_admin: bool, owner_id: str, status: str, 
     return (status or "").lower() in OPEN_TO_SUPERVISOR
 
 
+def report_total(amounts) -> Decimal:
+    """Add receipt amounts that may arrive as decimals or plain numbers."""
+    total = Decimal("0")
+    for amount in amounts:
+        if amount is None:
+            continue
+        total += Decimal(str(amount))
+    return total.quantize(Decimal("0.01"))
+
+
 def refresh_report(db: Session, report: ExpenseReport) -> None:
     db.flush()
     rows = db.query(Expense).filter(Expense.report_id == report.id).all()
-    report.total_amount = sum((row.amount or 0) for row in rows) or Decimal("0")
+    report.total_amount = report_total(row.amount for row in rows)
     report.expense_count = len(rows)
 
 
