@@ -19,6 +19,25 @@ import { File, Paths, UploadType } from "expo-file-system"
 import { api, ApiError, clearToken, getToken, readDetail, setToken } from "./src/api"
 import { API_URL } from "./src/config"
 
+function tell(title: string, message?: string) {
+  if (Platform.OS === "web") {
+    window.alert(message ? `${title}\n\n${message}` : title)
+    return
+  }
+  Alert.alert(title, message)
+}
+
+function confirmAction(title: string, message: string, confirmLabel: string, onConfirm: () => void, destructive = false) {
+  if (Platform.OS === "web") {
+    if (window.confirm(`${title}\n\n${message}`)) onConfirm()
+    return
+  }
+  Alert.alert(title, message, [
+    { text: "Cancel", style: "cancel" },
+    { text: confirmLabel, style: destructive ? "destructive" : "default", onPress: onConfirm },
+  ])
+}
+
 type Account = {
   category_id: string
   name: string
@@ -304,7 +323,7 @@ export default function App() {
       setLoginError(message)
       return
     }
-    Alert.alert(title, message)
+    tell(title, message)
   }
 
   const loadData = useCallback(async (asAdmin: boolean) => {
@@ -511,7 +530,7 @@ export default function App() {
   async function scanReceipt() {
     setFilingReportId("")
     if (accounts.length === 0) {
-      Alert.alert(
+      tell(
         "No expense accounts",
         "Create an expense account and assign it to a GL account first."
       )
@@ -519,7 +538,7 @@ export default function App() {
     }
     const permission = await ImagePicker.requestCameraPermissionsAsync()
     if (!permission.granted) {
-      Alert.alert("Camera", "Allow the camera to scan a receipt, or use Add screenshot to pick a photo.")
+      tell("Camera", "Allow the camera to scan a receipt, or use Add screenshot to pick a photo.")
       return
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -534,7 +553,7 @@ export default function App() {
     setFilingReportId(ontoReportId)
     if (accounts.length === 0) {
       setFilingReportId("")
-      Alert.alert(
+      tell(
         "No expense accounts",
         "Create an expense account and assign it to a GL account first."
       )
@@ -543,7 +562,7 @@ export default function App() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (!permission.granted) {
       setFilingReportId("")
-      Alert.alert("Photos", "Allow photo access to add a screenshot.")
+      tell("Photos", "Allow photo access to add a screenshot.")
       return
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -560,7 +579,7 @@ export default function App() {
   function openManual() {
     setFilingReportId("")
     if (accounts.length === 0) {
-      Alert.alert(
+      tell(
         "No expense accounts",
         "Create an expense account and assign it to a GL account first."
       )
@@ -574,13 +593,13 @@ export default function App() {
     const startProblem = dateProblem(periodStart)
     const endProblem = dateProblem(periodEnd)
     if (startProblem || endProblem) {
-      Alert.alert("Dates", startProblem || endProblem)
+      tell("Dates", startProblem || endProblem)
       return
     }
     const start = usToISO(periodStart)
     const end = usToISO(periodEnd)
     if (end < start) {
-      Alert.alert("Dates", "The end date is before the start date.")
+      tell("Dates", "The end date is before the start date.")
       return
     }
     setBusy(true)
@@ -615,7 +634,7 @@ export default function App() {
 
   async function addTrip() {
     if (!activeReport || !tripName.trim()) {
-      Alert.alert("Trip", "Enter a trip name.")
+      tell("Trip", "Enter a trip name.")
       return
     }
     setBusy(true)
@@ -649,7 +668,7 @@ export default function App() {
   async function decideReport(action: "approve" | "reject") {
     if (!activeReport) return
     if (action === "reject" && !rejectNotes.trim()) {
-      Alert.alert("Note required", "Say what needs to change before sending it back.")
+      tell("Note required", "Say what needs to change before sending it back.")
       return
     }
     setBusy(true)
@@ -694,24 +713,24 @@ export default function App() {
   async function fileExpense() {
     const amount = parseMoney(draft.amount)
     if (!draft.merchant.trim()) {
-      Alert.alert("Merchant required", "Enter the merchant from the receipt.")
+      tell("Merchant required", "Enter the merchant from the receipt.")
       return
     }
     if (amount == null) {
-      Alert.alert("Amount required", "Enter the receipt total, like 12.50.")
+      tell("Amount required", "Enter the receipt total, like 12.50.")
       return
     }
     const problem = dateProblem(draft.date)
     if (problem) {
-      Alert.alert("Date", problem)
+      tell("Date", problem)
       return
     }
     if (!draft.categoryId) {
-      Alert.alert("Account required", "Choose the expense account.")
+      tell("Account required", "Choose the expense account.")
       return
     }
     if (destination && !destination.ok) {
-      Alert.alert("Report", destination.message)
+      tell("Report", destination.message)
       return
     }
 
@@ -757,7 +776,7 @@ export default function App() {
       setTripId("")
       setDestination(null)
       await loadData(isAdmin)
-      Alert.alert("Filed", note)
+      tell("Filed", note)
       if (reopen) await openReport(reopen)
       else setScreen("home")
     } catch (error) {
@@ -791,20 +810,20 @@ export default function App() {
   async function saveLine() {
     const amount = parseMoney(editAmount)
     if (!editMerchant.trim()) {
-      Alert.alert("Merchant required", "Enter the merchant from the receipt.")
+      tell("Merchant required", "Enter the merchant from the receipt.")
       return
     }
     if (amount == null) {
-      Alert.alert("Amount required", "Enter the receipt total, like 12.50.")
+      tell("Amount required", "Enter the receipt total, like 12.50.")
       return
     }
     const problem = dateProblem(editDate)
     if (problem) {
-      Alert.alert("Date", problem)
+      tell("Date", problem)
       return
     }
     if (!editCategory) {
-      Alert.alert("Account required", "Choose the expense account.")
+      tell("Account required", "Choose the expense account.")
       return
     }
     setBusy(true)
@@ -821,7 +840,7 @@ export default function App() {
       setEditingId("")
       setActiveReport(saved.report)
       await loadData(isAdmin)
-      if (saved.message && saved.message !== "Saved.") Alert.alert("Receipt", saved.message)
+      if (saved.message && saved.message !== "Saved.") tell("Receipt", saved.message)
     } catch (error) {
       await fail("Not saved", error, "That receipt was not changed.")
     } finally {
@@ -830,31 +849,24 @@ export default function App() {
   }
 
   function removeLine(line: Line) {
-    Alert.alert("Remove receipt", `Remove ${line.merchant_name} from this report?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Remove",
-        style: "destructive",
-        onPress: () => {
-          setBusy(true)
-          api<{ message: string; report: ReportRow | null }>(`/expenses/${line.id}`, { method: "DELETE" })
-            .then(async (saved) => {
-              setEditingId("")
-              if (saved.report) setActiveReport(saved.report)
-              await loadData(isAdmin)
-            })
-            .catch(async (error) => {
-              await fail("Not removed", error, "That receipt was not removed.")
-            })
-            .finally(() => setBusy(false))
-        },
-      },
-    ])
+    confirmAction("Remove receipt", `Remove ${line.merchant_name} from this report?`, "Remove", () => {
+      setBusy(true)
+      api<{ message: string; report: ReportRow | null }>(`/expenses/${line.id}`, { method: "DELETE" })
+        .then(async (saved) => {
+          setEditingId("")
+          if (saved.report) setActiveReport(saved.report)
+          await loadData(isAdmin)
+        })
+        .catch(async (error) => {
+          await fail("Not removed", error, "That receipt was not removed.")
+        })
+        .finally(() => setBusy(false))
+    }, true)
   }
 
   async function invitePerson() {
     if (!inviteName.trim() || !inviteEmail.trim()) {
-      Alert.alert("Invite", "Enter a name and email.")
+      tell("Invite", "Enter a name and email.")
       return
     }
     setBusy(true)
@@ -909,7 +921,7 @@ export default function App() {
 
   async function createAccount() {
     if (!accountName.trim() || !glCode.trim()) {
-      Alert.alert("Account", "Enter the expense name and GL code.")
+      tell("Account", "Enter the expense name and GL code.")
       return
     }
     setBusy(true)
@@ -1274,13 +1286,11 @@ export default function App() {
             </Pressable>
           ) : null}
           {canPullBack ? (
-            <Pressable style={styles.secondary} onPress={() => Alert.alert(
+            <Pressable style={styles.secondary} onPress={() => confirmAction(
               "Pull back",
               "This report comes back to you so you can change it.",
-              [
-                { text: "Cancel", style: "cancel" },
-                { text: "Pull back", onPress: () => void withdrawReport() },
-              ],
+              "Pull back",
+              () => void withdrawReport(),
             )}>
               <Text style={styles.secondaryText}>Pull back</Text>
             </Pressable>
