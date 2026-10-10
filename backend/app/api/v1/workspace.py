@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from openpyxl import load_workbook
 from pydantic import BaseModel
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_password_hash
@@ -18,7 +19,7 @@ from app.models import (
     Expense, ExpenseReport, GLAccount, Merchant, Notice, ReportStatus, Trip, User, UserRole,
 )
 from app.services.gl_rollup import UNASSIGNED, rollup
-from app.services.reports import refresh_report
+from app.services.reports import can_view_report, refresh_report, team_member_ids
 from app.services.storage import storage_service
 
 router = APIRouter(tags=["Workspace"])
@@ -56,6 +57,18 @@ class RejectIn(BaseModel):
 
 def is_admin(user: User) -> bool:
     return user.role == UserRole.ADMIN
+
+
+def chart_rows(db: Session) -> list[dict]:
+    return [
+        {"id": str(user.id), "supervisor_id": str(user.supervisor_id) if user.supervisor_id else None}
+        for user in db.query(User.id, User.supervisor_id).all()
+    ]
+
+
+def viewer_can_open(user: User, report: ExpenseReport, db: Session) -> bool:
+    status = report.status.value if hasattr(report.status, "value") else str(report.status)
+    return can_view_report(str(user.id), is_admin(user), str(report.user_id), status, chart_rows(db))
 
 
 def person_dict(user: User) -> dict:
@@ -294,7 +307,14 @@ def list_reports(user_id: uuid.UUID | None = None, current_user: User = Depends(
     if is_admin(current_user) and user_id:
         query = query.filter(ExpenseReport.user_id == user_id)
     elif not is_admin(current_user):
-        query = query.filter(ExpenseReport.user_id == current_user.id)
+        team = team_member_ids(str(current_user.id), chart_rows(db))
+        visible = [ExpenseReport.user_id == current_user.id]
+        if team:
+            visible.append(and_(
+                ExpenseReport.user_id.in_(list(team)),
+                ExpenseReport.status.in_([ReportStatus.DRAFT, ReportStatus.SUBMITTED, ReportStatus.REJECTED]),
+            ))
+        query = query.filter(or_(*visible))
     reports = query.order_by(ExpenseReport.period_start.desc()).all()
     payload = [report_dict(report, db) for report in reports]
     db.commit()
@@ -326,7 +346,7 @@ def get_report(report_id: uuid.UUID, current_user: User = Depends(get_current_us
     report = db.query(ExpenseReport).filter(ExpenseReport.id == report_id).first()
     if report is None:
         raise HTTPException(status_code=404, detail="Report not found")
-    if not is_admin(current_user) and report.user_id != current_user.id:
+    if not viewer_can_open(current_user, report, db):
         raise HTTPException(status_code=403, detail="Not authorized")
     payload = report_dict(report, db)
     db.commit()
@@ -467,7 +487,7 @@ def export_report(
     report = db.query(ExpenseReport).filter(ExpenseReport.id == report_id).first()
     if report is None:
         raise HTTPException(status_code=404, detail="Report not found")
-    if not is_admin(current_user) and report.user_id != current_user.id:
+    if not viewer_can_open(current_user, report, db):
         raise HTTPException(status_code=403, detail="Not authorized")
     payload = report_dict(report, db)
     db.commit()

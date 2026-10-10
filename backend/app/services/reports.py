@@ -6,6 +6,36 @@ from app.models import Expense, ExpenseReport, ReportStatus, Trip
 
 
 OPEN_FOR_FILING = {ReportStatus.DRAFT, ReportStatus.REJECTED}
+OPEN_TO_SUPERVISOR = {"draft", "submitted", "rejected"}
+
+
+def team_member_ids(viewer_id: str, people: list[dict]) -> set[str]:
+    """Everyone who reports up to this person, through the whole chart."""
+    children: dict[str, list[str]] = {}
+    for person in people:
+        person_id = person.get("id")
+        supervisor_id = person.get("supervisor_id")
+        if not person_id or not supervisor_id or supervisor_id == person_id:
+            continue
+        children.setdefault(supervisor_id, []).append(person_id)
+    found: set[str] = set()
+    stack = list(children.get(viewer_id, []))
+    while stack:
+        current = stack.pop()
+        if current in found or current == viewer_id:
+            continue
+        found.add(current)
+        stack.extend(children.get(current, []))
+    return found
+
+
+def can_view_report(viewer_id: str, is_admin: bool, owner_id: str, status: str, people: list[dict]) -> bool:
+    """A supervisor can open an unfinished report filed by someone under them."""
+    if is_admin or viewer_id == owner_id:
+        return True
+    if owner_id not in team_member_ids(viewer_id, people):
+        return False
+    return (status or "").lower() in OPEN_TO_SUPERVISOR
 
 
 def refresh_report(db: Session, report: ExpenseReport) -> None:

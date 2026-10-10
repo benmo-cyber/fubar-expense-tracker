@@ -1,13 +1,17 @@
 {
   "expo": {
     "name": "FUBAR",
-    "slug": "mobile",
+    "slug": "fubar",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.wildwoodingredients.fubar",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +26,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow FUBAR to photograph a receipt.",
+          "photosPermission": "Allow FUBAR to add a receipt photo."
+        }
+      ]
     ]
   }
 }

@@ -1259,22 +1259,31 @@ export default function App() {
   }
 
   if (screen === "reports") {
+    const mine = reports.filter((report) => report.user_id === profile?.id)
+    const team = reports.filter((report) => report.user_id !== profile?.id)
     const groups = isAdmin
       ? Array.from(new Set(reports.map((report) => report.user_name))).sort().map((name) => ({
           key: name,
           title: name,
           rows: reports.filter((report) => report.user_name === name),
         }))
-      : ["draft", "submitted", "rejected", "approved"].map((status) => ({
-          key: status,
-          title: status,
-          rows: reports.filter((report) => report.status === status),
-        })).filter((group) => group.rows.length > 0)
+      : [
+          ...["draft", "submitted", "rejected", "approved"].map((status) => ({
+            key: status,
+            title: status,
+            rows: mine.filter((report) => report.status === status),
+          })),
+          ...Array.from(new Set(team.map((report) => report.user_name))).sort().map((name) => ({
+            key: `team-${name}`,
+            title: name,
+            rows: team.filter((report) => report.user_name === name),
+          })),
+        ].filter((group) => group.rows.length > 0)
     return (
       <Shell title="Reports">
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>Reports</Text>
-          <Text style={styles.hint}>{isAdmin ? "Grouped by person. Open a name to see their reports." : "Grouped by status."}</Text>
+          <Text style={styles.hint}>{isAdmin ? "Grouped by person. Open a name to see their reports." : "Your reports, then anyone who reports to you."}</Text>
           {groups.map((group) => {
             const total = group.rows.reduce((sum, report) => sum + report.total, 0)
             const open = openGroup === `report-${group.key}`
@@ -1361,13 +1370,23 @@ export default function App() {
         <Pressable style={styles.secondary} onPress={openManual}>
           <Text style={styles.secondaryText}>Enter manually</Text>
         </Pressable>
-        {(isAdmin ? reports.filter((report) => report.status === "submitted") : reports).slice(0, 5).map((report) => (
+        {(isAdmin ? reports.filter((report) => report.status === "submitted") : reports.filter((report) => report.user_id === profile?.id)).slice(0, 5).map((report) => (
           <Pressable key={report.id} style={styles.row} onPress={() => void openReport(report.id)}>
             <View style={styles.rowBody}>
               <Text style={styles.merchant}>{report.title}</Text>
               <Text style={styles.meta}>
                 {isAdmin ? `${report.user_name} · ` : ""}{report.status} · {prettyDate(report.period_start)}
               </Text>
+            </View>
+            <Text style={styles.amount}>{money(report.total)}</Text>
+          </Pressable>
+        ))}
+        {isAdmin || reports.every((report) => report.user_id === profile?.id) ? null : <Text style={styles.section}>Reports to you</Text>}
+        {isAdmin ? null : reports.filter((report) => report.user_id !== profile?.id).slice(0, 8).map((report) => (
+          <Pressable key={report.id} style={styles.row} onPress={() => void openReport(report.id)}>
+            <View style={styles.rowBody}>
+              <Text style={styles.merchant}>{report.user_name}</Text>
+              <Text style={styles.meta}>{report.title} · {report.status} · {prettyDate(report.period_start)}</Text>
             </View>
             <Text style={styles.amount}>{money(report.total)}</Text>
           </Pressable>
