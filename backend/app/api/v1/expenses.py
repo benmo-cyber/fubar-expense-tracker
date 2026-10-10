@@ -4,19 +4,25 @@ from sqlalchemy import and_, or_
 from app.core.database import get_db
 from app.models import (
     Expense, Category, User, ExpenseStatus, GLAccount, GLAccountMapping,
-    ExpenseReport, ReportCategoryBreakdown, ReportStatus, UserRole,
+    ExpenseReport, ReportCategoryBreakdown, ReportStatus, UserRole, Trip,
 )
 from app.schemas import (
     ExpenseCreate, ExpenseUpdate, ExpenseResponse, ExpenseDetailResponse,
-    ExpenseApproveRequest, ExpenseRejectRequest, BulkApprovalResponse,
+    ExpenseApproveRequest, ExpenseRejectRequest,
     ReceiptScanResponse, OCRResult, AICategorization, FileExpenseRequest
 )
 from app.middleware.auth import get_current_user, get_current_admin_user
 from app.services.storage import storage_service
-from app.services.webhook import webhook_service
 from app.services.ocr import ocr_service
+from app.services.corrections import (
+    CorrectionError,
+    DestinationError,
+    choose_destination,
+    save_line,
+    take_line_off,
+)
 from app.services.merchants import resolve_merchant
-from app.services.reports import place_expense
+from app.services.reports import _report_rows, place_expense
 from app.services.ai import ai_service
 from app.services.gl_assign import posting_gl_id
 from typing import List, Optional
@@ -98,7 +104,7 @@ async def scan_receipt(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if not file.content_type.startswith("image/"):
+    if not (file.content_type or "").startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
     
     image_content = await file.read()
@@ -156,7 +162,7 @@ async def upload_receipt(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user)
 ):
-    if not file.content_type.startswith("image/"):
+    if not (file.content_type or "").startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
     
     url = storage_service.upload_file(file.file, file.filename, file.content_type)
@@ -217,6 +223,7 @@ def file_expense(
     ocr_confidence: Optional[float] = Form(None),
     ai_confidence: Optional[float] = Form(None),
     trip_id: Optional[uuid.UUID] = Form(None),
+    report_id: Optional[uuid.UUID] = Form(None),
     file: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -259,8 +266,7 @@ def file_expense(
         ai_suggested_category_id=category.id,
         ai_confidence=ai_confidence,
         notes=notes,
-        status=ExpenseStatus.PENDING,
-        submitted_at=datetime.utcnow(),
+        status=ExpenseStatus.DRAFT,
         category_manually_set=False,
         gl_override=False,
         trip_id=trip_id,
@@ -270,7 +276,11 @@ def file_expense(
         db_expense.merchant_id = merchant.id
     db.add(db_expense)
     db.flush()
-    place_expense(db, db_expense)
+    try:
+        place_expense(db, db_expense, forced_report_id=report_id)
+    except DestinationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=exc.message) from exc
     db.commit()
     db.refresh(db_expense)
     return db_expense
@@ -285,7 +295,7 @@ def list_expenses(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    query = db.query(Expense)
+    query = db.query(Expense).filter(Expense.removed_at.is_(None))
     
     if current_user.role != "admin":
         query = query.filter(Expense.user_id == current_user.id)
@@ -298,6 +308,38 @@ def list_expenses(
     
     expenses = query.order_by(Expense.expense_date.desc()).offset(skip).limit(limit).all()
     return expenses
+
+
+def _actor_is_admin(user: User) -> bool:
+    role = user.role.value if hasattr(user.role, "value") else user.role
+    return role == UserRole.ADMIN or role == "admin" or bool(user.is_superuser)
+
+
+def _report_payload(report, db: Session):
+    from app.api.v1.workspace import report_dict
+    return report_dict(report, db)
+
+
+@router.get("/destination")
+def filing_destination(
+    expense_date: date,
+    trip_id: Optional[uuid.UUID] = None,
+    report_id: Optional[uuid.UUID] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    reports = db.query(ExpenseReport).filter(ExpenseReport.user_id == current_user.id).all()
+    trip = None
+    if trip_id is not None:
+        trip_row = db.query(Trip).filter(Trip.id == trip_id).first()
+        if trip_row and trip_row.report and trip_row.report.user_id == current_user.id:
+            trip = {"id": str(trip_row.id), "name": trip_row.name, "report_id": str(trip_row.report_id)}
+    return choose_destination(
+        expense_date,
+        _report_rows(reports),
+        trip,
+        str(report_id) if report_id else None,
+    )
 
 
 @router.get("/{expense_id}", response_model=ExpenseDetailResponse)
@@ -317,7 +359,7 @@ def get_expense(
     return expense
 
 
-@router.put("/{expense_id}", response_model=ExpenseDetailResponse)
+@router.put("/{expense_id}")
 def update_expense(
     expense_id: uuid.UUID,
     expense_update: ExpenseUpdate,
@@ -325,59 +367,54 @@ def update_expense(
     db: Session = Depends(get_db)
 ):
     expense = db.query(Expense).filter(Expense.id == expense_id).first()
-    
-    if not expense:
+    if not expense or expense.removed_at is not None:
         raise HTTPException(status_code=404, detail="Expense not found")
-    
-    if current_user.role != UserRole.ADMIN and expense.user_id != current_user.id:
+    if not _actor_is_admin(current_user) and expense.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    if current_user.role != UserRole.ADMIN and expense.report is not None and expense.report.status not in (ReportStatus.DRAFT, ReportStatus.REJECTED):
-        raise HTTPException(status_code=400, detail="This report is with your supervisor")
-    
     update_data = expense_update.model_dump(exclude_unset=True)
-    
-    if "category_id" in update_data and update_data["category_id"]:
-        expense.category_manually_set = True
-        
-        if not expense_update.gl_override:
-            mapping = db.query(GLAccountMapping).filter(
-                GLAccountMapping.category_id == update_data["category_id"]
-            ).first()
-            if mapping:
-                update_data["gl_account_id"] = mapping.gl_account_id
-    
-    for field, value in update_data.items():
-        setattr(expense, field, value)
-    
+    merchant_name = update_data.get("merchant_name", expense.merchant_name)
+    amount = update_data.get("amount", expense.amount)
+    expense_date = update_data.get("expense_date", expense.expense_date)
+    category_id = update_data.get("category_id", expense.category_id)
+    if category_id is None:
+        raise HTTPException(status_code=400, detail="Choose an expense account.")
+    origin_id = expense.report_id
+    try:
+        landed, message = save_line(db, expense, merchant_name or "", amount, expense_date, category_id)
+    except CorrectionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    if "notes" in update_data:
+        expense.notes = update_data["notes"]
+    shown = landed
+    if origin_id and landed.id != origin_id:
+        shown = db.query(ExpenseReport).filter(ExpenseReport.id == origin_id).first() or landed
     db.commit()
-    db.refresh(expense)
-    return expense
+    return {"message": message, "report": _report_payload(shown, db)}
 
 
-@router.delete("/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{expense_id}")
 def delete_expense(
     expense_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     expense = db.query(Expense).filter(Expense.id == expense_id).first()
-    
-    if not expense:
+    if not expense or expense.removed_at is not None:
         raise HTTPException(status_code=404, detail="Expense not found")
-    
-    if expense.user_id != current_user.id:
+    if not _actor_is_admin(current_user) and expense.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized")
-    
-    if expense.status == ExpenseStatus.APPROVED:
-        raise HTTPException(status_code=400, detail="Cannot delete approved expenses")
-    
-    if expense.receipt_url:
-        storage_service.delete_file(expense.receipt_url)
-    
-    db.delete(expense)
+    try:
+        report = take_line_off(db, expense)
+    except CorrectionError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=exc.message) from exc
     db.commit()
-    return None
+    return {
+        "message": "Removed from the report.",
+        "report": _report_payload(report, db) if report is not None else None,
+    }
 
 
 @router.post("/{expense_id}/submit", response_model=ExpenseDetailResponse)
@@ -396,91 +433,37 @@ def submit_expense(
     
     if expense.status != ExpenseStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Expense already submitted")
-    
-    expense.status = ExpenseStatus.PENDING
-    expense.submitted_at = datetime.utcnow()
+
     if expense.merchant_name and expense.merchant_id is None:
         merchant = resolve_merchant(db, expense.merchant_name)
         if merchant:
             expense.merchant_id = merchant.id
     place_expense(db, expense)
-    
+
     db.commit()
     db.refresh(expense)
     return expense
 
 
-@router.post("/approve", response_model=BulkApprovalResponse)
+@router.post("/approve")
 async def approve_expenses(
     request: ExpenseApproveRequest,
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
-    approved_count = 0
-    failed_count = 0
-    failed_ids = []
-    
-    for expense_id in request.expense_ids:
-        expense = db.query(Expense).filter(Expense.id == expense_id).first()
-        
-        if not expense or expense.status != ExpenseStatus.PENDING:
-            failed_count += 1
-            failed_ids.append(expense_id)
-            continue
-        
-        expense.status = ExpenseStatus.APPROVED
-        expense.approved_at = datetime.utcnow()
-        expense.approved_by = current_user.id
-        approved_count += 1
-        
-        # Send webhook notification for ERP integration
-        await webhook_service.notify_expense_approved({
-            "id": str(expense.id),
-            "amount": float(expense.amount),
-            "currency": expense.currency,
-            "expense_date": expense.expense_date.isoformat(),
-            "merchant_name": expense.merchant_name,
-            "gl_account_code": expense.gl_account.account_code if expense.gl_account else None,
-            "employee_email": expense.user.email if expense.user else None,
-            "approved_at": expense.approved_at.isoformat(),
-            "approved_by": current_user.email
-        })
-    
-    db.commit()
-    
-    return BulkApprovalResponse(
-        approved_count=approved_count,
-        failed_count=failed_count,
-        failed_ids=failed_ids
+    raise HTTPException(
+        status_code=400,
+        detail="Approve the report. Individual receipts are not approved on their own.",
     )
 
 
-@router.post("/reject", response_model=BulkApprovalResponse)
+@router.post("/reject")
 def reject_expenses(
     request: ExpenseRejectRequest,
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
-    approved_count = 0
-    failed_count = 0
-    failed_ids = []
-    
-    for expense_id in request.expense_ids:
-        expense = db.query(Expense).filter(Expense.id == expense_id).first()
-        
-        if not expense or expense.status != ExpenseStatus.PENDING:
-            failed_count += 1
-            failed_ids.append(expense_id)
-            continue
-        
-        expense.status = ExpenseStatus.REJECTED
-        expense.rejection_reason = request.rejection_reason
-        approved_count += 1
-    
-    db.commit()
-    
-    return BulkApprovalResponse(
-        approved_count=approved_count,
-        failed_count=failed_count,
-        failed_ids=failed_ids
+    raise HTTPException(
+        status_code=400,
+        detail="Send the report back. Individual receipts are not rejected on their own.",
     )

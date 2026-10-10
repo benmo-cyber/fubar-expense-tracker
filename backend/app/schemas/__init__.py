@@ -203,6 +203,7 @@ class ExpenseResponse(ExpenseBase):
     category_manually_set: bool
     gl_account_id: Optional[UUID4] = None
     gl_override: bool
+    report_id: Optional[UUID4] = None
     rejection_reason: Optional[str] = None
     created_at: datetime
     updated_at: datetime

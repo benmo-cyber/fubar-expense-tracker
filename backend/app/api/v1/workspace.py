@@ -18,6 +18,7 @@ from app.middleware.auth import get_current_admin_user, get_current_user
 from app.models import (
     Expense, ExpenseReport, GLAccount, Merchant, Notice, ReportStatus, Trip, User, UserRole,
 )
+from app.services.corrections import can_send_back, can_withdraw, report_is_open, stamp_lines
 from app.services.gl_rollup import UNASSIGNED, rollup
 from app.services.receipt_pack import bundle_name, grouped_receipts, pack_report, receipt_folder_name
 from app.services.reports import can_view_report, refresh_report, team_member_ids
@@ -85,7 +86,10 @@ def person_dict(user: User) -> dict:
 
 
 def report_dict(report: ExpenseReport, db: Session) -> dict:
-    expenses = db.query(Expense).filter(Expense.report_id == report.id).all()
+    expenses = db.query(Expense).filter(
+        Expense.report_id == report.id,
+        Expense.removed_at.is_(None),
+    ).all()
     by_gl: dict[str, Decimal] = {}
     by_merchant: dict[str, Decimal] = {}
     for expense in expenses:
@@ -146,6 +150,7 @@ def report_dict(report: ExpenseReport, db: Session) -> dict:
                 "trip_id": str(expense.trip_id) if expense.trip_id else None,
                 "trip_name": next((trip.name for trip in report.trips if trip.id == expense.trip_id), None),
                 "category_name": expense.category.name if expense.category else None,
+                "category_id": str(expense.category_id) if expense.category_id else None,
                 "description": expense.description,
                 "gl_name": expense.gl_account.account_name if expense.gl_account else None,
                 "gl_code": expense.gl_account.account_code if expense.gl_account else None,
@@ -187,7 +192,10 @@ def sync_reminders(db: Session) -> None:
 @router.get("/summary")
 def summary(user_id: uuid.UUID | None = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     target_id = user_id if user_id and is_admin(current_user) else current_user.id
-    expenses = db.query(Expense).filter(Expense.user_id == target_id).all()
+    expenses = db.query(Expense).filter(
+        Expense.user_id == target_id,
+        Expense.removed_at.is_(None),
+    ).all()
     by_gl: dict[str, Decimal] = {}
     by_merchant: dict[str, Decimal] = {}
     for expense in expenses:
@@ -273,7 +281,7 @@ def issue_temporary_password(user_id: uuid.UUID, current_user: User = Depends(ge
 
 @router.get("/merchants")
 def list_merchants(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    query = db.query(Expense)
+    query = db.query(Expense).filter(Expense.removed_at.is_(None))
     if not is_admin(current_user):
         query = query.filter(Expense.user_id == current_user.id)
     totals: dict[str, dict] = {}
@@ -559,6 +567,10 @@ def add_trip(report_id: uuid.UUID, body: TripIn, current_user: User = Depends(ge
         raise HTTPException(status_code=404, detail="Report not found")
     if report.user_id != current_user.id and not is_admin(current_user):
         raise HTTPException(status_code=403, detail="Not authorized")
+    if not report_is_open(report.status):
+        raise HTTPException(status_code=400, detail="Pull this report back before adding a trip.")
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="Enter a trip name.")
     trip = Trip(report_id=report.id, name=body.name.strip())
     db.add(trip)
     db.commit()
@@ -582,11 +594,26 @@ def submit_report(report_id: uuid.UUID, current_user: User = Depends(get_current
     report = _owned_report(db, report_id, current_user)
     if report.status not in (ReportStatus.DRAFT, ReportStatus.REJECTED):
         raise HTTPException(status_code=400, detail="This report is not open for submission")
+    refresh_report(db, report)
     if not report.expense_count:
         raise HTTPException(status_code=400, detail="Add at least one expense before submitting")
     report.status = ReportStatus.SUBMITTED
     report.submitted_at = datetime.utcnow()
     report.review_notes = None
+    stamp_lines(db, report)
+    db.commit()
+    db.refresh(report)
+    return report_dict(report, db)
+
+
+@router.post("/reports/{report_id}/withdraw")
+def withdraw_report(report_id: uuid.UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    report = _owned_report(db, report_id, current_user)
+    if not can_withdraw(report.status):
+        raise HTTPException(status_code=400, detail="Only a submitted report can be pulled back")
+    report.status = ReportStatus.DRAFT
+    report.submitted_at = None
+    stamp_lines(db, report)
     db.commit()
     db.refresh(report)
     return report_dict(report, db)
@@ -602,6 +629,7 @@ def approve_report(report_id: uuid.UUID, current_user: User = Depends(get_curren
     report.status = ReportStatus.APPROVED
     report.reviewed_by = current_user.id
     report.finalized_at = datetime.utcnow()
+    stamp_lines(db, report, current_user.id)
     db.commit()
     db.refresh(report)
     return report_dict(report, db)
@@ -615,11 +643,12 @@ def reject_report(report_id: uuid.UUID, body: RejectIn, current_user: User = Dep
     report = db.query(ExpenseReport).filter(ExpenseReport.id == report_id).first()
     if report is None:
         raise HTTPException(status_code=404, detail="Report not found")
-    if report.status != ReportStatus.SUBMITTED:
-        raise HTTPException(status_code=400, detail="Only a submitted report can be sent back")
+    if not can_send_back(report.status):
+        raise HTTPException(status_code=400, detail="Only a submitted or approved report can be sent back")
     report.status = ReportStatus.REJECTED
     report.review_notes = notes
     report.reviewed_by = current_user.id
+    stamp_lines(db, report)
     if report.user_id:
         db.add(Notice(
             user_id=report.user_id,

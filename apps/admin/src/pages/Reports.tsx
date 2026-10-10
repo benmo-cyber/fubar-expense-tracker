@@ -17,6 +17,7 @@ type Line = {
   expense_date: string
   trip_name: string | null
   category_name: string | null
+  category_id?: string | null
   gl_name: string | null
   gl_code: string | null
   parent_code?: string | null
@@ -51,6 +52,13 @@ function moneyTip({ active, payload, label }: { active?: boolean; payload?: { va
 }
 
 const REPORT_STATUSES = ['submitted', 'draft', 'rejected', 'approved', 'finalized']
+
+type AccountChoice = { category_id: string; name: string }
+
+function detailFrom(error: unknown, fallback: string) {
+  const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+  return typeof detail === 'string' ? detail : fallback
+}
 
 export default function Reports() {
   const [reports, setReports] = useState<Report[]>([])
@@ -143,6 +151,13 @@ export function ReportDetail() {
   const [notes, setNotes] = useState('')
   const [error, setError] = useState('')
   const [photo, setPhoto] = useState<string | null>(null)
+  const [accounts, setAccounts] = useState<AccountChoice[]>([])
+  const [editing, setEditing] = useState<Line | null>(null)
+  const [merchant, setMerchant] = useState('')
+  const [amount, setAmount] = useState('')
+  const [expenseDate, setExpenseDate] = useState('')
+  const [categoryId, setCategoryId] = useState('')
+  const [notice, setNotice] = useState('')
 
   async function load() {
     const { data } = await api.get<Report>(`/reports/${reportId}`)
@@ -151,6 +166,9 @@ export function ReportDetail() {
 
   useEffect(() => {
     load().catch(() => setError('That report could not be opened.'))
+    api.get<AccountChoice[]>('/gl-accounts/expense-accounts')
+      .then(({ data }) => setAccounts(data))
+      .catch(() => setAccounts([]))
   }, [reportId])
 
   async function download(fileFormat: 'xlsx' | 'csv') {
@@ -179,11 +197,60 @@ export function ReportDetail() {
 
   async function act(path: string, body?: object) {
     setError('')
+    setNotice('')
     try {
-      await api.post(`/reports/${reportId}/${path}`, body)
-      await load()
-    } catch {
-      setError('That report could not be updated.')
+      const { data } = await api.post<Report>(`/reports/${reportId}/${path}`, body)
+      setReport(data)
+      setNotes('')
+    } catch (error) {
+      setError(detailFrom(error, 'That report could not be updated.'))
+    }
+  }
+
+  function beginEdit(line: Line) {
+    setEditing(line)
+    setMerchant(line.merchant_name)
+    setAmount(Number(line.amount).toFixed(2))
+    setExpenseDate(line.expense_date)
+    setCategoryId(line.category_id || '')
+    setNotice('')
+    setError('')
+  }
+
+  async function saveLine() {
+    if (!editing) return
+    const cleaned = amount.replace(/[$,]/g, "").trim()
+    if (!merchant.trim() || !/^\d+(\.\d{1,2})?$/.test(cleaned) || Number(cleaned) <= 0 || !expenseDate || !categoryId) {
+      setError("Enter the merchant, a total like 12.50, a date, and an expense account.")
+      return
+    }
+    setError('')
+    setNotice('')
+    try {
+      const { data } = await api.put<{ message: string; report: Report }>(`/expenses/${editing.id}`, {
+        merchant_name: merchant.trim(),
+        amount: cleaned,
+        expense_date: expenseDate,
+        category_id: categoryId,
+      })
+      setReport(data.report)
+      setEditing(null)
+      setNotice(data.message === 'Saved.' ? 'Saved.' : data.message)
+    } catch (error) {
+      setError(detailFrom(error, 'That receipt was not changed.'))
+    }
+  }
+
+  async function removeLine(line: Line) {
+    setError('')
+    setNotice('')
+    try {
+      const { data } = await api.delete<{ message: string; report: Report | null }>(`/expenses/${line.id}`)
+      if (data.report) setReport(data.report)
+      setEditing(null)
+      setNotice(data.message)
+    } catch (error) {
+      setError(detailFrom(error, 'That receipt was not removed.'))
     }
   }
 
@@ -211,6 +278,7 @@ export function ReportDetail() {
         </div>
       </div>
       {report.review_notes ? <p className="rounded-xl bg-white p-4 text-sm shadow-sm">Notes: {report.review_notes}</p> : null}
+      {notice ? <p className="text-sm text-[#0B3D73]">{notice}</p> : null}
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -272,6 +340,7 @@ export function ReportDetail() {
                 <th className="px-4 py-3 font-medium">GL</th>
                 <th className="px-4 py-3 font-medium">Trip</th>
                 <th className="px-4 py-3 text-right font-medium">Amount</th>
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
@@ -286,12 +355,39 @@ export function ReportDetail() {
                   </td>
                   <td className="px-4 py-3">{line.trip_name || '—'}</td>
                   <td className="px-4 py-3 text-right font-semibold">{formatCurrency(line.amount)}</td>
+                  <td className="px-4 py-3 text-right">
+                    {report.status === 'draft' || report.status === 'rejected' ? (
+                      <button type="button" className="font-semibold text-[#1D6FE8]" onClick={() => beginEdit(line)}>Correct</button>
+                    ) : null}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </CardContent>
       </Card>
+
+      {editing && (report.status === 'draft' || report.status === 'rejected') ? (
+        <Card className="border-0 shadow-sm">
+          <CardHeader><CardTitle className="text-[#0B3D73]">Correct {editing.merchant_name}</CardTitle></CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-2">
+            <Input value={merchant} onChange={(event) => setMerchant(event.target.value)} placeholder="Merchant" />
+            <Input value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Amount" />
+            <Input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} />
+            <select className="rounded-md border bg-white px-3 py-2 text-sm" value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+              <option value="">Expense account</option>
+              {accounts.map((account) => (
+                <option key={account.category_id} value={account.category_id}>{account.name}</option>
+              ))}
+            </select>
+            <div className="flex gap-2 md:col-span-2">
+              <Button className="bg-[#1D6FE8] hover:bg-[#0B4F8A]" onClick={() => void saveLine()}>Save correction</Button>
+              <Button variant="outline" onClick={() => void removeLine(editing)}>Remove from report</Button>
+              <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div>
         <h2 className="mb-3 text-lg font-semibold text-[#0B3D73]">Receipts</h2>
@@ -320,9 +416,13 @@ export function ReportDetail() {
         </button>
       ) : null}
 
-      {report.status === 'submitted' ? (
+      {report.status === 'submitted' || report.status === 'approved' ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button className="bg-[#1D6FE8] hover:bg-[#0B4F8A]" onClick={() => void act('approve')}>Approve</Button>
+          {report.status === 'submitted' ? (
+            <Button className="bg-[#1D6FE8] hover:bg-[#0B4F8A]" onClick={() => void act('approve')}>Approve</Button>
+          ) : (
+            <p className="text-sm text-muted-foreground">This report is approved. Send it back to let the receipts be corrected.</p>
+          )}
           <Input className="max-w-sm" placeholder="What needs to change" value={notes} onChange={(event) => setNotes(event.target.value)} />
           <Button variant="outline" onClick={() => void act('reject', { notes })}>Send back</Button>
         </div>

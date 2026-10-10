@@ -59,6 +59,7 @@ export interface Expense {
   ai_confidence?: number
   category_manually_set: boolean
   status: 'draft' | 'pending' | 'approved' | 'rejected'
+  report_id?: string | null
   notes?: string
   rejection_reason?: string
   gl_override: boolean

@@ -137,6 +137,7 @@ class Expense(Base):
     submitted_at = Column(DateTime)
     approved_at = Column(DateTime)
     approved_by = Column(Uuid(as_uuid=True), ForeignKey("users.id"))
+    removed_at = Column(DateTime)
     
     user = relationship("User", back_populates="expenses", foreign_keys=[user_id])
     approver = relationship("User", back_populates="approved_expenses", foreign_keys=[approved_by])

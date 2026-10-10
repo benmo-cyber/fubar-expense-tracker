@@ -25,27 +25,33 @@ def get_dashboard_stats(
     db: Session = Depends(get_db)
 ):
     pending_count = db.query(func.count(Expense.id)).filter(
-        Expense.status == ExpenseStatus.PENDING
+        Expense.status == ExpenseStatus.PENDING,
+        Expense.removed_at.is_(None),
     ).scalar()
     
     approved_count = db.query(func.count(Expense.id)).filter(
-        Expense.status == ExpenseStatus.APPROVED
+        Expense.status == ExpenseStatus.APPROVED,
+        Expense.removed_at.is_(None),
     ).scalar()
     
     rejected_count = db.query(func.count(Expense.id)).filter(
-        Expense.status == ExpenseStatus.REJECTED
+        Expense.status == ExpenseStatus.REJECTED,
+        Expense.removed_at.is_(None),
     ).scalar()
     
     total_pending_amount = db.query(func.sum(Expense.amount)).filter(
-        Expense.status == ExpenseStatus.PENDING
+        Expense.status == ExpenseStatus.PENDING,
+        Expense.removed_at.is_(None),
     ).scalar() or 0
     
     total_approved_amount = db.query(func.sum(Expense.amount)).filter(
-        Expense.status == ExpenseStatus.APPROVED
+        Expense.status == ExpenseStatus.APPROVED,
+        Expense.removed_at.is_(None),
     ).scalar() or 0
     
     recent_expenses = db.query(Expense).filter(
-        Expense.status == ExpenseStatus.PENDING
+        Expense.status == ExpenseStatus.PENDING,
+        Expense.removed_at.is_(None),
     ).order_by(Expense.submitted_at.desc()).limit(10).all()
     
     return DashboardStats(
@@ -72,7 +78,7 @@ def get_finance_insights(
     current_user=Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
-    expenses = db.query(Expense).all()
+    expenses = db.query(Expense).filter(Expense.removed_at.is_(None)).all()
     reports = db.query(ExpenseReport).all()
     today = date.today()
     monthly: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
@@ -130,6 +136,7 @@ def export_expenses(
     db: Session = Depends(get_db)
 ):
     query = db.query(Expense).filter(
+        Expense.removed_at.is_(None),
         and_(
             Expense.expense_date >= export_request.start_date,
             Expense.expense_date <= export_request.end_date

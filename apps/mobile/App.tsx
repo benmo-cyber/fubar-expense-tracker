@@ -16,7 +16,7 @@ import { StatusBar } from "expo-status-bar"
 import * as ImagePicker from "expo-image-picker"
 import * as Sharing from "expo-sharing"
 import { File, Paths, UploadType } from "expo-file-system"
-import { api, clearToken, getToken, setToken } from "./src/api"
+import { api, ApiError, clearToken, getToken, readDetail, setToken } from "./src/api"
 import { API_URL } from "./src/config"
 
 type Account = {
@@ -33,6 +33,7 @@ type Expense = {
   amount: number | string
   expense_date: string
   status: "draft" | "pending" | "approved" | "rejected"
+  report_id?: string | null
   notes?: string
   category?: { name: string }
   gl_account?: { account_code: string; account_name: string }
@@ -65,6 +66,7 @@ type Line = {
   expense_date: string
   trip_name?: string | null
   category_name?: string | null
+  category_id?: string | null
   gl_name?: string | null
   gl_code?: string | null
   receipt_url?: string | null
@@ -86,6 +88,7 @@ type ReportRow = {
   expenses?: Line[]
 }
 type Notice = { id: string; message: string; read: boolean }
+type Destination = { ok: boolean; message: string }
 type Summary = { spend: number; open_reports: number; awaiting_review: number; by_gl: Split[]; by_merchant: Split[] }
 type Profile = { id: string; email: string; full_name: string; role: string; must_change_password?: boolean }
 type Person = {
@@ -136,7 +139,27 @@ function isoToUS(value: string) {
 function usToISO(value: string) {
   const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value.trim())
   if (!match) return ""
-  return `${match[3]}-${match[1].padStart(2, "0")}-${match[2].padStart(2, "0")}`
+  const month = Number(match[1])
+  const day = Number(match[2])
+  const year = Number(match[3])
+  const parsed = new Date(year, month - 1, day)
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return "invalid"
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+}
+
+function dateProblem(value: string) {
+  const iso = usToISO(value)
+  if (iso === "invalid") return "That date is not a real calendar day. Use a date like 08/02/2026."
+  if (!iso) return "Use a date like 08/02/2026."
+  return ""
+}
+
+function parseMoney(value: string) {
+  const cleaned = value.trim().replace(/[$,]/g, "")
+  if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null
+  const amount = Number(cleaned)
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  return amount
 }
 
 function todayUS() {
@@ -250,8 +273,39 @@ export default function App() {
   const [merchantQuery, setMerchantQuery] = useState("")
   const [openLetter, setOpenLetter] = useState("")
   const [openGroup, setOpenGroup] = useState("")
+  const [filingReportId, setFilingReportId] = useState("")
+  const [destination, setDestination] = useState<Destination | null>(null)
+  const [editingId, setEditingId] = useState("")
+  const [editMerchant, setEditMerchant] = useState("")
+  const [editAmount, setEditAmount] = useState("")
+  const [editDate, setEditDate] = useState("")
+  const [editCategory, setEditCategory] = useState("")
 
   const isAdmin = profile?.role === "admin"
+
+  function explain(error: unknown, fallback: string) {
+    const message = error instanceof Error ? error.message : ""
+    if (/inactive/i.test(message)) return "This account is turned off. Ask an admin to turn it back on."
+    if (/incorrect email/i.test(message)) return "Those credentials were not accepted."
+    if (error instanceof ApiError && error.status === 401) return "Your sign-in expired. Sign in again."
+    if (/could not validate credentials/i.test(message)) return "Your sign-in expired. Sign in again."
+    if (/network request failed|failed to fetch|network error/i.test(message)) {
+      return "The phone could not reach the server. Try again in a moment."
+    }
+    return message || fallback
+  }
+
+  async function fail(title: string, error: unknown, fallback: string) {
+    const message = explain(error, fallback)
+    if (message === "Your sign-in expired. Sign in again.") {
+      await clearToken()
+      setSignedIn(false)
+      setProfile(null)
+      setLoginError(message)
+      return
+    }
+    Alert.alert(title, message)
+  }
 
   const loadData = useCallback(async (asAdmin: boolean) => {
     const [expenseRows, accountRows, summaryRow, noticeRows, reportRows, merchantRows] = await Promise.all([
@@ -289,12 +343,49 @@ export default function App() {
         setSignedIn(true)
         if (!me.must_change_password) await loadData(me.role === "admin")
       })
-      .catch(async () => {
+      .catch(async (error) => {
         await clearToken()
         setSignedIn(false)
+        setLoginError(explain(error, "The phone could not reach the server. Try again in a moment."))
       })
       .finally(() => setReady(true))
   }, [loadData])
+
+  useEffect(() => {
+    if (screen !== "review") return
+    const iso = usToISO(draft.date)
+    if (iso === "invalid") {
+      setDestination({ ok: false, message: "That date is not a real calendar day. Use a date like 08/02/2026." })
+      return
+    }
+    if (!iso) {
+      setDestination(null)
+      return
+    }
+    const params = new URLSearchParams({ expense_date: iso })
+    if (tripId) params.set("trip_id", tripId)
+    if (filingReportId) params.set("report_id", filingReportId)
+    let cancelled = false
+    api<Destination>(`/expenses/destination?${params.toString()}`)
+      .then((row) => {
+        if (!cancelled) setDestination(row)
+      })
+      .catch(async (error) => {
+        if (cancelled) return
+        const message = explain(error, "The report for this receipt could not be checked.")
+        if (message === "Your sign-in expired. Sign in again.") {
+          await clearToken()
+          setSignedIn(false)
+          setProfile(null)
+          setLoginError(message)
+          return
+        }
+        setDestination({ ok: false, message })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [screen, draft.date, tripId, filingReportId])
 
   async function signIn() {
     setLoginError("")
@@ -312,10 +403,7 @@ export default function App() {
       setScreen("home")
       if (!(result.must_change_password || me.must_change_password)) await loadData(me.role === "admin")
     } catch (error) {
-      const message = error instanceof Error ? error.message : ""
-      setLoginError(message.includes("401") || message.toLowerCase().includes("password")
-        ? "Those credentials were not accepted."
-        : "The phone could not reach the server. Try again in a moment.")
+      setLoginError(explain(error, "The phone could not reach the server. Try again in a moment."))
     } finally {
       setBusy(false)
     }
@@ -332,7 +420,7 @@ export default function App() {
       })
       setForgotNotice(result.message)
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : "The reset could not be requested.")
+      setLoginError(explain(error, "The reset could not be requested."))
     } finally {
       setBusy(false)
     }
@@ -356,7 +444,7 @@ export default function App() {
       setConfirmPassword("")
       if (profile) await loadData(profile.role === "admin")
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : "The password was not changed.")
+      setLoginError(explain(error, "The password was not changed."))
     } finally {
       setBusy(false)
     }
@@ -368,7 +456,7 @@ export default function App() {
       const created = await api<{ temporary_password: string }>(`/people/${person.id}/temporary-password`, { method: "POST" })
       setIssuedPassword(created.temporary_password)
     } catch (error) {
-      Alert.alert("Password", error instanceof Error ? error.message : "A temporary password was not issued.")
+      await fail("Password", error, "A temporary password was not issued.")
     }
   }
 
@@ -397,7 +485,7 @@ export default function App() {
         },
       })
       if (upload.status < 200 || upload.status >= 300) {
-        throw new Error(upload.body || `Scan failed (${upload.status})`)
+        throw new ApiError(upload.status, readDetail(upload.body || "", upload.status))
       }
       const scan = JSON.parse(upload.body) as ScanResult
       const suggestion = scan.ai_suggestion
@@ -414,13 +502,14 @@ export default function App() {
       })
       setScreen("review")
     } catch (error) {
-      Alert.alert("Could not read that image", error instanceof Error ? error.message : "The receipt could not be read.")
+      await fail("Could not read that image", error, "The receipt could not be read.")
     } finally {
       setBusy(false)
     }
   }
 
   async function scanReceipt() {
+    setFilingReportId("")
     if (accounts.length === 0) {
       Alert.alert(
         "No expense accounts",
@@ -441,8 +530,10 @@ export default function App() {
     await readReceipt(result.assets[0])
   }
 
-  async function addScreenshot() {
+  async function addScreenshot(ontoReportId = "") {
+    setFilingReportId(ontoReportId)
     if (accounts.length === 0) {
+      setFilingReportId("")
       Alert.alert(
         "No expense accounts",
         "Create an expense account and assign it to a GL account first."
@@ -451,6 +542,7 @@ export default function App() {
     }
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (!permission.granted) {
+      setFilingReportId("")
       Alert.alert("Photos", "Allow photo access to add a screenshot.")
       return
     }
@@ -458,11 +550,15 @@ export default function App() {
       mediaTypes: ["images"],
       quality: 0.9,
     })
-    if (result.canceled || !result.assets[0]) return
+    if (result.canceled || !result.assets[0]) {
+      setFilingReportId("")
+      return
+    }
     await readReceipt(result.assets[0])
   }
 
   function openManual() {
+    setFilingReportId("")
     if (accounts.length === 0) {
       Alert.alert(
         "No expense accounts",
@@ -475,10 +571,16 @@ export default function App() {
   }
 
   async function createReport() {
+    const startProblem = dateProblem(periodStart)
+    const endProblem = dateProblem(periodEnd)
+    if (startProblem || endProblem) {
+      Alert.alert("Dates", startProblem || endProblem)
+      return
+    }
     const start = usToISO(periodStart)
     const end = usToISO(periodEnd)
-    if (!start || !end) {
-      Alert.alert("Dates", "Use dates like 08/01/2026.")
+    if (end < start) {
+      Alert.alert("Dates", "The end date is before the start date.")
       return
     }
     setBusy(true)
@@ -491,7 +593,7 @@ export default function App() {
       setScreen("report")
       await loadData(isAdmin)
     } catch (error) {
-      Alert.alert("Not created", error instanceof Error ? error.message : "The report was not created.")
+      await fail("Not created", error, "The report was not created.")
     } finally {
       setBusy(false)
     }
@@ -500,18 +602,22 @@ export default function App() {
   async function openReport(id: string) {
     setBusy(true)
     try {
+      setEditingId("")
       setRejectNotes("")
       setActiveReport(await api<ReportRow>(`/reports/${id}`))
       setScreen("report")
     } catch (error) {
-      Alert.alert("Report", error instanceof Error ? error.message : "That report could not be opened.")
+      await fail("Report", error, "That report could not be opened.")
     } finally {
       setBusy(false)
     }
   }
 
   async function addTrip() {
-    if (!activeReport || !tripName.trim()) return
+    if (!activeReport || !tripName.trim()) {
+      Alert.alert("Trip", "Enter a trip name.")
+      return
+    }
     setBusy(true)
     try {
       setActiveReport(await api<ReportRow>(`/reports/${activeReport.id}/trips`, {
@@ -520,6 +626,8 @@ export default function App() {
       }))
       setTripName("")
       await loadData(isAdmin)
+    } catch (error) {
+      await fail("Trip", error, "That trip was not added.")
     } finally {
       setBusy(false)
     }
@@ -532,7 +640,7 @@ export default function App() {
       setActiveReport(await api<ReportRow>(`/reports/${activeReport.id}/submit`, { method: "POST" }))
       await loadData(isAdmin)
     } catch (error) {
-      Alert.alert("Not submitted", error instanceof Error ? error.message : "Add an expense before submitting.")
+      await fail("Not submitted", error, "Add an expense before submitting.")
     } finally {
       setBusy(false)
     }
@@ -553,7 +661,7 @@ export default function App() {
       setRejectNotes("")
       await loadData(true)
     } catch (error) {
-      Alert.alert("Not updated", error instanceof Error ? error.message : "The report was not updated.")
+      await fail("Not updated", error, "The report was not updated.")
     } finally {
       setBusy(false)
     }
@@ -579,36 +687,40 @@ export default function App() {
         dialogTitle: "Expense report",
       })
     } catch (error) {
-      Alert.alert("Download", error instanceof Error ? error.message : "The file could not be saved.")
+      await fail("Download", error, "The file could not be saved.")
     }
   }
 
   async function fileExpense() {
-    const amount = Number(draft.amount)
+    const amount = parseMoney(draft.amount)
     if (!draft.merchant.trim()) {
       Alert.alert("Merchant required", "Enter the merchant from the receipt.")
       return
     }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      Alert.alert("Amount required", "Enter the receipt total.")
+    if (amount == null) {
+      Alert.alert("Amount required", "Enter the receipt total, like 12.50.")
       return
     }
-    const expenseDate = usToISO(draft.date)
-    if (!expenseDate) {
-      Alert.alert("Date format", "Use a date like 08/02/2026.")
+    const problem = dateProblem(draft.date)
+    if (problem) {
+      Alert.alert("Date", problem)
       return
     }
     if (!draft.categoryId) {
       Alert.alert("Account required", "Choose the expense account.")
       return
     }
+    if (destination && !destination.ok) {
+      Alert.alert("Report", destination.message)
+      return
+    }
 
     setBusy(true)
     try {
       const fields: Record<string, string> = {
-        amount: String(amount),
+        amount: amount.toFixed(2),
         merchant_name: draft.merchant.trim(),
-        expense_date: expenseDate,
+        expense_date: usToISO(draft.date),
         category_id: draft.categoryId,
         currency: "USD",
         notes: draft.notes.trim(),
@@ -617,6 +729,7 @@ export default function App() {
       if (draft.ocrConfidence) fields.ocr_confidence = draft.ocrConfidence
       if (draft.aiConfidence) fields.ai_confidence = draft.aiConfidence
       if (tripId) fields.trip_id = tripId
+      if (filingReportId) fields.report_id = filingReportId
       if (draft.receiptUri) {
         const token = await getToken()
         const upload = await new File(draft.receiptUri).upload(`${API_URL}/expenses/file`, {
@@ -630,20 +743,113 @@ export default function App() {
           },
         })
         if (upload.status < 200 || upload.status >= 300) {
-          throw new Error(upload.body || `Submit failed (${upload.status})`)
+          throw new ApiError(upload.status, readDetail(upload.body || "", upload.status))
         }
       } else {
         const body = new FormData()
         Object.entries(fields).forEach(([key, value]) => body.append(key, value))
         await api("/expenses/file", { method: "POST", body })
       }
+      const note = destination?.message || "The receipt was added to your report."
+      const reopen = filingReportId
+      setFilingReportId("")
+      setDraft(emptyDraft())
+      setTripId("")
+      setDestination(null)
       await loadData(isAdmin)
-      setScreen("home")
+      Alert.alert("Filed", note)
+      if (reopen) await openReport(reopen)
+      else setScreen("home")
     } catch (error) {
-      Alert.alert("Not filed", error instanceof Error ? error.message : "The expense was not submitted.")
+      await fail("Not filed", error, "The expense was not submitted.")
     } finally {
       setBusy(false)
     }
+  }
+
+  async function withdrawReport() {
+    if (!activeReport) return
+    setBusy(true)
+    try {
+      setActiveReport(await api<ReportRow>(`/reports/${activeReport.id}/withdraw`, { method: "POST" }))
+      await loadData(isAdmin)
+    } catch (error) {
+      await fail("Not pulled back", error, "The report was not pulled back.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function beginEdit(line: Line) {
+    setEditingId(line.id)
+    setEditMerchant(line.merchant_name)
+    setEditAmount(Number(line.amount).toFixed(2))
+    setEditDate(isoToUS(line.expense_date))
+    setEditCategory(line.category_id || "")
+  }
+
+  async function saveLine() {
+    const amount = parseMoney(editAmount)
+    if (!editMerchant.trim()) {
+      Alert.alert("Merchant required", "Enter the merchant from the receipt.")
+      return
+    }
+    if (amount == null) {
+      Alert.alert("Amount required", "Enter the receipt total, like 12.50.")
+      return
+    }
+    const problem = dateProblem(editDate)
+    if (problem) {
+      Alert.alert("Date", problem)
+      return
+    }
+    if (!editCategory) {
+      Alert.alert("Account required", "Choose the expense account.")
+      return
+    }
+    setBusy(true)
+    try {
+      const saved = await api<{ message: string; report: ReportRow }>(`/expenses/${editingId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          merchant_name: editMerchant.trim(),
+          amount: amount.toFixed(2),
+          expense_date: usToISO(editDate),
+          category_id: editCategory,
+        }),
+      })
+      setEditingId("")
+      setActiveReport(saved.report)
+      await loadData(isAdmin)
+      if (saved.message && saved.message !== "Saved.") Alert.alert("Receipt", saved.message)
+    } catch (error) {
+      await fail("Not saved", error, "That receipt was not changed.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function removeLine(line: Line) {
+    Alert.alert("Remove receipt", `Remove ${line.merchant_name} from this report?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => {
+          setBusy(true)
+          api<{ message: string; report: ReportRow | null }>(`/expenses/${line.id}`, { method: "DELETE" })
+            .then(async (saved) => {
+              setEditingId("")
+              if (saved.report) setActiveReport(saved.report)
+              await loadData(isAdmin)
+            })
+            .catch(async (error) => {
+              await fail("Not removed", error, "That receipt was not removed.")
+            })
+            .finally(() => setBusy(false))
+        },
+      },
+    ])
   }
 
   async function invitePerson() {
@@ -668,7 +874,7 @@ export default function App() {
       setInviteEmail("")
       await loadData(true)
     } catch (error) {
-      Alert.alert("Invite", error instanceof Error ? error.message : "That person was not invited.")
+      await fail("Invite", error, "That person was not invited.")
     } finally {
       setBusy(false)
     }
@@ -681,7 +887,7 @@ export default function App() {
       setRenameId("")
       await loadData(true)
     } catch (error) {
-      Alert.alert("People", error instanceof Error ? error.message : "That change was not saved.")
+      await fail("People", error, "That change was not saved.")
     } finally {
       setBusy(false)
     }
@@ -695,7 +901,7 @@ export default function App() {
       setMergeSource("")
       await loadData(true)
     } catch (error) {
-      Alert.alert("Merchants", error instanceof Error ? error.message : "Those merchants were not merged.")
+      await fail("Merchants", error, "Those merchants were not merged.")
     } finally {
       setBusy(false)
     }
@@ -716,7 +922,7 @@ export default function App() {
       setGlCode("")
       await loadData(true)
     } catch (error) {
-      Alert.alert("Account", error instanceof Error ? error.message : "That account was not created.")
+      await fail("Account", error, "That account was not created.")
     } finally {
       setBusy(false)
     }
@@ -853,7 +1059,7 @@ export default function App() {
       <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <StatusBar style="light" />
         <View style={styles.header}>
-          <Pressable onPress={() => setScreen("home")}>
+          <Pressable onPress={() => setScreen(filingReportId ? "report" : "home")}>
             <Text style={styles.signOut}>Back</Text>
           </Pressable>
           <Text style={styles.brand}>Review receipt</Text>
@@ -925,6 +1131,9 @@ export default function App() {
                 </Pressable>
               ))}
           </View>
+          {destination ? (
+            <Text style={destination.ok ? styles.hint : styles.error}>{destination.message}</Text>
+          ) : null}
           <Pressable style={styles.primary} onPress={() => void fileExpense()}>
             <Text style={styles.primaryText}>Submit to expense report</Text>
           </Pressable>
@@ -935,8 +1144,11 @@ export default function App() {
 
   if (screen === "report" && activeReport) {
     const ownsReport = activeReport.user_id === profile?.id
-    const canSubmit = ownsReport && (activeReport.status === "draft" || activeReport.status === "rejected")
+    const canEdit = ownsReport && (activeReport.status === "draft" || activeReport.status === "rejected")
+    const canSubmit = canEdit
+    const canPullBack = ownsReport && activeReport.status === "submitted"
     const canReview = isAdmin && activeReport.status === "submitted"
+    const canSendBack = isAdmin && (activeReport.status === "submitted" || activeReport.status === "approved")
     return (
       <Shell title="Report">
         <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
@@ -955,6 +1167,15 @@ export default function App() {
             <Bars rows={activeReport.by_merchant} />
           </View>
           <Text style={styles.label}>Entries</Text>
+          {ownsReport && activeReport.status === "submitted" ? (
+            <Text style={styles.hint}>Pull this report back before adding or changing a receipt.</Text>
+          ) : null}
+          {ownsReport && activeReport.status === "approved" ? (
+            <Text style={styles.hint}>This report is approved. An admin has to send it back before a receipt can be changed.</Text>
+          ) : null}
+          {!ownsReport ? (
+            <Text style={styles.hint}>Only {activeReport.user_name} can change these receipts. An admin can correct them on the website.</Text>
+          ) : null}
           {(activeReport.expenses || []).map((line) => (
             <View key={line.id} style={styles.card}>
               <View style={styles.barLabel}>
@@ -973,6 +1194,42 @@ export default function App() {
               ) : (
                 <Text style={styles.meta}>No receipt photo</Text>
               )}
+              {canEdit && editingId !== line.id ? (
+                <Pressable style={styles.secondary} onPress={() => beginEdit(line)}>
+                  <Text style={styles.secondaryText}>Correct</Text>
+                </Pressable>
+              ) : null}
+              {canEdit && editingId === line.id ? (
+                <View>
+                  <Text style={styles.label}>Merchant</Text>
+                  <TextInput value={editMerchant} onChangeText={setEditMerchant} style={styles.input} />
+                  <Text style={styles.label}>Total</Text>
+                  <TextInput value={editAmount} onChangeText={setEditAmount} keyboardType="decimal-pad" style={styles.input} />
+                  <Text style={styles.label}>Date</Text>
+                  <TextInput value={editDate} onChangeText={setEditDate} placeholder="MM/DD/YYYY" placeholderTextColor="#94a3b8" style={styles.input} />
+                  <Text style={styles.label}>Expense account</Text>
+                  <View style={styles.chips}>
+                    {accounts.map((item) => (
+                      <Pressable
+                        key={item.category_id}
+                        onPress={() => setEditCategory(item.category_id)}
+                        style={[styles.chip, editCategory === item.category_id && styles.chipOn]}
+                      >
+                        <Text style={[styles.chipText, editCategory === item.category_id && styles.chipTextOn]}>{item.name}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <Pressable style={styles.primary} onPress={() => void saveLine()}>
+                    <Text style={styles.primaryText}>Save correction</Text>
+                  </Pressable>
+                  <Pressable style={styles.secondary} onPress={() => removeLine(line)}>
+                    <Text style={styles.secondaryText}>Remove from report</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setEditingId("")}>
+                    <Text style={styles.back}>Cancel</Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
           ))}
           <View style={styles.rowButtons}>
@@ -993,21 +1250,44 @@ export default function App() {
               <Text style={styles.amount}>{money(trip.total)}</Text>
             </View>
           ))}
-          <TextInput value={tripName} onChangeText={setTripName} placeholder="Trip name" placeholderTextColor="#94a3b8" style={styles.input} />
-          <Pressable style={styles.secondary} onPress={() => void addTrip()}>
-            <Text style={styles.secondaryText}>Add trip</Text>
-          </Pressable>
-          <Pressable style={styles.secondary} onPress={() => void addScreenshot()}>
-            <Text style={styles.secondaryText}>Add screenshot</Text>
-          </Pressable>
+          {canEdit ? (
+            <TextInput value={tripName} onChangeText={setTripName} placeholder="Trip name" placeholderTextColor="#94a3b8" style={styles.input} />
+          ) : null}
+          {canEdit ? (
+            <Pressable style={styles.secondary} onPress={() => void addTrip()}>
+              <Text style={styles.secondaryText}>Add trip</Text>
+            </Pressable>
+          ) : null}
+          {canEdit ? (
+            <Pressable style={styles.secondary} onPress={() => void addScreenshot(activeReport.id)}>
+              <Text style={styles.secondaryText}>Add receipt photo</Text>
+            </Pressable>
+          ) : null}
+          {draft.merchant || draft.amount || draft.receiptUri ? (
+            <Pressable style={styles.secondary} onPress={() => setScreen("review")}>
+              <Text style={styles.secondaryText}>Continue this receipt</Text>
+            </Pressable>
+          ) : null}
           {canSubmit ? (
             <Pressable style={styles.primary} onPress={() => void submitReport()}>
               <Text style={styles.primaryText}>{activeReport.status === "rejected" ? "Resubmit" : "Submit for approval"}</Text>
             </Pressable>
           ) : null}
-          {canReview ? (
+          {canPullBack ? (
+            <Pressable style={styles.secondary} onPress={() => Alert.alert(
+              "Pull back",
+              "This report comes back to you so you can change it.",
+              [
+                { text: "Cancel", style: "cancel" },
+                { text: "Pull back", onPress: () => void withdrawReport() },
+              ],
+            )}>
+              <Text style={styles.secondaryText}>Pull back</Text>
+            </Pressable>
+          ) : null}
+          {canSendBack ? (
             <View>
-              <Text style={styles.label}>Send back with a note</Text>
+              <Text style={styles.label}>{activeReport.status === "approved" ? "Send this approval back with a note" : "Send back with a note"}</Text>
               <TextInput
                 value={rejectNotes}
                 onChangeText={setRejectNotes}
@@ -1018,9 +1298,11 @@ export default function App() {
               <Pressable style={styles.secondary} onPress={() => void decideReport("reject")}>
                 <Text style={styles.secondaryText}>Send back</Text>
               </Pressable>
-              <Pressable style={styles.primary} onPress={() => void decideReport("approve")}>
-                <Text style={styles.primaryText}>Approve</Text>
-              </Pressable>
+              {canReview ? (
+                <Pressable style={styles.primary} onPress={() => void decideReport("approve")}>
+                  <Text style={styles.primaryText}>Approve</Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
         </ScrollView>
@@ -1215,7 +1497,7 @@ export default function App() {
       <Shell title="Expenses">
         <ScrollView contentContainerStyle={styles.form}>
           <Text style={styles.title}>Expenses</Text>
-          <Text style={styles.hint}>Grouped by month. Open a month to see the receipts.</Text>
+          <Text style={styles.hint}>Grouped by month. Open a receipt to correct it on its report.</Text>
           <Pressable style={styles.secondary} onPress={openManual}>
             <Text style={styles.secondaryText}>Enter manually</Text>
           </Pressable>
@@ -1236,7 +1518,7 @@ export default function App() {
                   <Text style={styles.amount}>{money(total)}</Text>
                 </Pressable>
                 {open ? rows.map((item) => (
-                  <View key={item.id} style={[styles.row, { marginLeft: 16 }]}>
+                  <Pressable key={item.id} style={[styles.row, { marginLeft: 16 }]} onPress={() => item.report_id && void openReport(item.report_id)}>
                     <View style={styles.rowBody}>
                       <Text style={styles.merchant}>{item.merchant_name || "Receipt"}</Text>
                       <Text style={styles.meta}>
@@ -1248,7 +1530,7 @@ export default function App() {
                       <Text style={styles.amount}>{money(item.amount)}</Text>
                       <Text style={styles.status}>{STATUS_LABEL[item.status]}</Text>
                     </View>
-                  </View>
+                  </Pressable>
                 )) : null}
               </View>
             )
@@ -1370,6 +1652,11 @@ export default function App() {
         <Pressable style={styles.secondary} onPress={openManual}>
           <Text style={styles.secondaryText}>Enter manually</Text>
         </Pressable>
+        {draft.merchant || draft.amount || draft.receiptUri ? (
+          <Pressable style={styles.secondary} onPress={() => setScreen("review")}>
+            <Text style={styles.secondaryText}>Continue this receipt</Text>
+          </Pressable>
+        ) : null}
         {(isAdmin ? reports.filter((report) => report.status === "submitted") : reports.filter((report) => report.user_id === profile?.id)).slice(0, 5).map((report) => (
           <Pressable key={report.id} style={styles.row} onPress={() => void openReport(report.id)}>
             <View style={styles.rowBody}>

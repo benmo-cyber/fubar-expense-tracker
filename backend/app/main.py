@@ -89,12 +89,26 @@ def seed_local_users():
         if admin_user:
             for person in db.query(User).filter(User.id != admin_user.id, User.supervisor_id.is_(None)).all():
                 person.supervisor_id = admin_user.id
-        for expense in db.query(Expense).filter(Expense.report_id.is_(None)).all():
+        for expense in db.query(Expense).filter(Expense.report_id.is_(None), Expense.removed_at.is_(None)).all():
             if expense.merchant_name and expense.merchant_id is None:
                 merchant = resolve_merchant(db, expense.merchant_name)
                 if merchant:
                     expense.merchant_id = merchant.id
             place_expense(db, expense)
+        from app.models import ExpenseStatus
+        from app.services.corrections import reconcile_line
+
+        for expense in db.query(Expense).filter(Expense.report_id.isnot(None), Expense.removed_at.is_(None)).all():
+            if expense.report is None:
+                continue
+            wanted = reconcile_line(expense.report.status, expense.status)
+            if wanted is None:
+                continue
+            expense.status = ExpenseStatus(wanted)
+            if wanted == "draft":
+                expense.submitted_at = None
+                expense.approved_at = None
+                expense.approved_by = None
         db.commit()
     finally:
         db.close()

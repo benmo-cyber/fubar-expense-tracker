@@ -13,6 +13,7 @@ COLUMN_PATCHES = {
         "merchant_id": "CHAR(32)",
         "report_id": "CHAR(32)",
         "trip_id": "CHAR(32)",
+        "removed_at": "DATETIME",
     },
     "gl_accounts": {
         "parent_id": "CHAR(32)",
