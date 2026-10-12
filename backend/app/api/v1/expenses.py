@@ -25,6 +25,7 @@ from app.services.merchants import resolve_merchant
 from app.services.reports import _report_rows, place_expense
 from app.services.ai import ai_service
 from app.services.gl_assign import posting_gl_id
+from app.services.receipt_image import ReceiptImageError, prepare_receipt_image
 from typing import List, Optional
 from datetime import datetime, date
 from calendar import monthrange
@@ -108,6 +109,10 @@ async def scan_receipt(
         raise HTTPException(status_code=400, detail="File must be an image")
     
     image_content = await file.read()
+    try:
+        image_content = prepare_receipt_image(image_content)
+    except ReceiptImageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     categories = db.query(Category).filter(Category.is_active == True).all()
     category_dicts = [
         {"id": cat.id, "name": cat.name, "description": cat.description}
