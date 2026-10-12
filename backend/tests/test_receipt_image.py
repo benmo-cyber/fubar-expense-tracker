@@ -40,3 +40,11 @@ class ReceiptImageTests(unittest.TestCase):
     def test_an_empty_upload_is_refused(self):
         with self.assertRaises(ReceiptImageError):
             prepare_receipt_image(b"")
+
+    def test_the_heif_decoder_can_read_an_ios_26_hdr_screenshot(self):
+        import pillow_heif
+
+        decoder = pillow_heif.libheif_info()["decoders"]["libde265"]
+        version = tuple(int(part) for part in decoder.rsplit("version ", 1)[-1].split("."))
+        # iOS 26 HDR screenshots are tiled HEIF. libde265 1.0.15 cannot decode them.
+        self.assertGreaterEqual(version, (1, 0, 16))

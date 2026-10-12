@@ -1,7 +1,8 @@
 """Turn an uploaded receipt into bytes the reader can open.
 
 A normal iPhone screenshot is a PNG, which opens directly. Photos from the
-iPhone library are often HEIC, and that file is what gets uploaded.
+library are often HEIC. An iOS 26 HDR screenshot is a tiled HEIF file, and
+that file needs a current HEIF decoder before it can be turned into a JPEG.
 """
 import io
 
@@ -36,6 +37,8 @@ def prepare_receipt_image(data: bytes) -> bytes:
         image = _decode(data)
         if image is not None:
             return _jpeg(image)
+    header = data[:16]
+    print(f"Receipt image could not be opened: {len(data)} bytes, header {header!r}")
     raise ReceiptImageError("The reader could not open that photo.")
 
 
@@ -54,7 +57,7 @@ def _decode(data: bytes):
         image = Image.open(io.BytesIO(data))
         image.load()
         return image
-    except (UnidentifiedImageError, OSError):
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError):
         return None
 
 
