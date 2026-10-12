@@ -15,6 +15,11 @@ def generate_temp_password(length: int = 10) -> str:
     return "".join(secrets.choice(TEMP_ALPHABET) for _ in range(length))
 
 
+def login_identity(email: str, password: str) -> tuple[str, str]:
+    """Sign-in ignores capital letters and spaces copied around the email or password."""
+    return (email or "").strip().lower(), (password or "").strip()
+
+
 def must_change_after_issue(actor_id: str, target_id: str) -> bool:
     """A temporary password always has to be replaced, including one you issue for yourself."""
     return True

@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from datetime import datetime
@@ -10,6 +11,7 @@ from app.core.security import get_password_hash, verify_password, create_access_
 from app.services.passwords import (
     can_send_reset,
     forgot_message,
+    login_identity,
     make_reset_token,
     read_reset_token,
     reset_link,
@@ -55,8 +57,9 @@ class LoginRequest(BaseModel):
 
 @router.post("/login", response_model=Token)
 def login(body: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == body.email).first()
-    if not user or not verify_password(body.password, user.hashed_password):
+    email, password = login_identity(body.email, body.password)
+    user = db.query(User).filter(func.lower(User.email) == email).first()
+    if not user or not verify_password(password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",

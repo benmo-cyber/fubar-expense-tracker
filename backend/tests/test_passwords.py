@@ -6,6 +6,7 @@ from app.services.passwords import (
     can_send_reset,
     forgot_message,
     generate_temp_password,
+    login_identity,
     make_reset_token,
     must_change_after_issue,
     read_reset_token,
@@ -21,6 +22,9 @@ class PasswordRuleTests(unittest.TestCase):
         self.assertTrue(password.isalnum())
         self.assertNotIn("0", password)
         self.assertNotIn("O", password)
+
+    def test_sign_in_accepts_capital_letters_and_surrounding_spaces(self):
+        self.assertEqual(login_identity("  Gary.Morris@WildwoodIngredients.com ", "  cedar8146  "), ("gary.morris@wildwoodingredients.com", "cedar8146"))
 
     def test_a_temporary_password_always_requires_a_change(self):
         self.assertTrue(must_change_after_issue("admin", "sales"))
